@@ -1,8 +1,8 @@
 # iPod Nano 2 慢应用
 
-七个跑在 iPod Nano 第二代（[Rockbox](https://www.rockbox.org/) 固件）上的 Lua 小程序。它们几乎不需要你做什么：规则很少，画面跟着真实的时间和季节慢慢变，你只是偶尔路过看一眼。
+十个跑在 iPod Nano 第二代（[Rockbox](https://www.rockbox.org/) 固件）上的 Lua 小程序。它们几乎不需要你做什么：规则很少，画面跟着真实的时间和季节慢慢变，你只是偶尔路过看一眼。
 
-Seven slow, ambient Lua apps for the iPod Nano 2G running Rockbox: a sandpile, a flock of birds, Half Dome in fog, a fire lookout tower, a pottery wheel, a quiet one-hole golf course, and a Game of Life whose rules turn with the wheel.
+Ten slow, ambient Lua apps for the iPod Nano 2G running Rockbox: a sandpile, a flock of birds, Half Dome in fog, a fire lookout tower, a pottery wheel, a quiet one-hole golf course, a Game of Life whose rules turn with the wheel, a sandbox with turning gravity, a dusk lawn sprinkler, and a chess opponent whose thinking you can watch.
 
 | | |
 | --- | --- |
@@ -10,10 +10,12 @@ Seven slow, ambient Lua apps for the iPod Nano 2G running Rockbox: a sandpile, a
 | ![穹顶与雾霭](screenshots/08_dome_alpenglow.png) | ![瞭望塔](screenshots/12_tower_smoke.png) |
 | ![陶艺转盘](screenshots/16_pottery_shelf.png) | ![高尔夫](screenshots/18_golf_evening.png) |
 | ![规则旋钮：生命游戏](screenshots/19_rules_life.png) | ![规则旋钮：迷宫](screenshots/20_rules_maze.png) |
+| ![旋转重力](screenshots/22_gravity_turned.png) | ![洒水器：黄昏](screenshots/23_sprinkler_dusk.png) |
+| ![国际象棋：选子时的落点提示](screenshots/25_chess_pick.png) | ![国际象棋：落子](screenshots/26_chess_target.png) |
 
 完整的设计思路见 [iPod Nano 2 慢应用.md](iPod%20Nano%202%20慢应用.md)。
 
-## 七个应用
+## 十个应用
 
 ### 沙堆 `sandpile.lua`
 
@@ -105,17 +107,51 @@ Seven slow, ambient Lua apps for the iPod Nano 2G running Rockbox: a sandpile, a
   - 长按 Select：在中间撒一把活格子。
   - Play：看收藏。转盘翻页；Select 把这个收藏搬回主宇宙。
 
+### 旋转重力 `gravity.lua`
+
+一个装着沙、水和种子的小盒子，转盘转动重力的方向。
+
+- **材料**：沙往下掉、往斜下滑；水还会往两边流；种子碰到水就发芽；植物不动，把地形钉住；石头不动。
+- **植物**：按真实时间慢慢往上长。整株 3 天没碰到水就枯成沙。
+- **角落数字**：盒子里现在有几株植物。
+- **静下来以后**：一分钟没动静，会有一粒沙自己松动，引起一小段滑坡。
+- **操作**：
+  - 转盘：重力转 45 度，共 8 个方向。框上的小方块指着“下”。
+  - Select：从上游撒一把，沙、水、种子轮流。
+  - 下一首：看活得最久的那株植物活了几天。
+
+### 洒水器 `sprinkler.lua`
+
+俯视一片草地，中间是你的喷头，远处两个自动洒水器自己转。
+
+- **开放时间**：日落前 30 分钟自动打开，日落后 40 分钟关。白天可以手动开；夜里不能开。
+- **喷头**：手指在转盘哪里，水就喷向哪里。转得慢，水落得近、湿得透；转得快，洒得远、只湿一层皮。
+- **草地**：湿的格子每 5 分钟干一点。浇透的那天草好一档，两天以上没浇就差一档。下雨天整片草地都算浇过。
+- **鸟**：水洼多了，偶尔落下一只鸟喝水；喷头转过去，它就飞走。
+- **水的颜色**：跟着天色走，黄昏是橘色的。
+- **操作**：
+  - 转盘：喷头方向。
+  - Select：白天手动开 / 关。
+
+### 国际象棋 `chess.lua`
+
+你执白，对手在机器里。它思考时，正在考虑的走法会在棋盘上淡蓝色地一个个闪过。
+
+- **规则**：完整规则，包括王车易位、吃过路兵、兵升变。只剩王，或王加一个轻子，算和棋。
+- **落子提示**：
+  - 选子时，光标停在哪颗子上，就预先用黄点标出它所有能走的格子；能吃子的格子标四个角。
+  - 上一步的起点和终点会着色；被将军时，王所在的格子是红的。
+- **对手**：搜索 2～3 步，大约初学者水平。输了不认输，只是想得越来越久。
+- **右边窄条**：上面是你吃掉的子，下面是它吃掉的子；最下面是思考时间。一局结束后显示结果和“赢了几局 / 下了几局”。
+- **操作**：
+  - 选子：转盘在能动的棋子之间跳，Select 选中。
+  - 落子：转盘在合法落点之间跳，Select 落子，Menu 退回选子。兵到底线时，再用转盘选升变成什么。
+  - 上一首：悔一步。新开一局时，角落会写上一局悔了几步。
+  - Play：思考时间 3 / 10 / 30 秒。
+  - 一局结束后，Select 开新局。
+  - 选子时按 Menu 退出。
+
 所有应用都是 Menu 退出，进度自动保存。
-
-## 计划中
-
-另外三个应用已经有设计，还没开始写：
-
-- **洒水器**：只在每天黄昏开放，用转盘控制喷头方向。
-- **旋转重力**：转盘转动沙盒的重力方向。
-- **国际象棋**：和机器下棋，能看到对手在考虑哪几步。
-
-开发顺序和做法见 [新应用开发计划.md](新应用开发计划.md)。
 
 ## 安装
 
@@ -133,6 +169,7 @@ Seven slow, ambient Lua apps for the iPod Nano 2G running Rockbox: a sandpile, a
 ```sh
 ./tools/build.sh                      # 打包到 dist/，并检查 Rockbox Lua 的限制
 lua test/run.lua dist/golf.lua 300 0 "fwd*5,flick*3,select"   # 在桌面上的假 Rockbox 里跑
+lua test/chess_perft.lua              # 象棋引擎：perft 走法数和几个战术局面
 tools/snap.sh dist/dome.lua 40 0 "" dome   # 跑 40 帧，把画面存成 PNG
 ./tools/deploy.sh [--no-eject] [文件夹]    # 打包、拷进 iPod、推出
 ./tools/yosemite.sh                   # 从照片重新生成穹顶的场景（照片在 no_upload/，不在仓库里）
