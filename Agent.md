@@ -1,0 +1,125 @@
+# Agent.md：项目知识库
+
+给接手这个项目的 AI 助手或开发者看。这里记的是代码里看不出来、靠查 Rockbox 源码和上机试出来的事。改代码之前先读一遍。
+
+## 项目是什么
+
+- iPod Nano 第二代 + Rockbox 固件上的六个 Lua「慢应用」：沙堆、鸟群、穹顶与雾霭、瞭望塔、陶艺转盘、高尔夫。
+- 设计文档：`iPod Nano 2 慢应用.md`。用户介绍见 `README.md`。
+- 设计原则，改功能时要守住：
+  - 规则极少，结果靠时间长出来。
+  - 不在场也成立：打开时按经过的真实时间补算。
+  - 少字：每个应用最多一个角落数字，日志和数字只用英文 / 数字。
+  - 每个应用 4 种左右颜色，转盘只管一件事。
+  - Menu 一定能退出。
+
+## 目标平台：Rockbox 的 Lua（最重要）
+
+Rockbox 的 Lua 是改过的 Lua 5.1，和桌面 Lua 差别很大。以下每一条都在真机上踩过，或者核对过 Rockbox 源码（`apps/plugins/lua/`）。
+
+### 编译限制（真机报错过）
+
+- **每个函数最多 100 个同时存在的局部变量**，普通 Lua 是 200。Rockbox 在 `luaconf.h` 里改成了 `LUAI_MAXVARS 100`。真机报错原文：`main function has more than 100 local variables`。
+- **每个函数最多 30 个 upvalue**，普通 Lua 是 60（`LUAI_MAXUPVALUES 30`）。真机报错原文：`function at line N has more than 30 upvalues`。
+- `tools/check_limits.lua` 用桌面 `luac -l -l` 的字节码清单数这两个数，`build.sh` 每次都会跑，超限就打包失败。它和真机报错的位置一致。
+- 应对办法：
+  - 共用代码里只给游戏内部用的东西，包进 `do ... end`。
+  - 同类常量合成一个表，比如 golf 的 `T`、tower 的 `C`。
+  - 大的画图函数拆成几个小函数。
+  - golf 的主函数现在 93 个，最紧；再加顶层变量前先省一个。
+
+### 数字只有整数
+
+- `LUA_NUMBER` 是 `long`。`/` 是截断取整，没有浮点，没有 `math.sin`。
+- 代码里所有除法一律用 `div()`（向下取整），取余用 `mod()`，不要直接写 `a / b`。桌面 Lua 5.4 的 `/` 会得到浮点，`test/run.lua` 会抓画图参数里的非整数。
+- 32 位溢出：unix 时间（秒）可以用；不要把它再乘 1000。随机数用 `Rng()`（ZX81 式线性同余，不会溢出）。
+- 三角函数用查表，比如 golf 的 `COS` 表；距离只比平方，长度用 max + 3/8·min 近似。
+
+### 语法是 5.1
+
+- 不能用 `//`、`&`、`|`、`~`、`<<`、`goto`、`::label::`、`table.unpack`（用 `unpack`，或者干脆不用）。`build.sh` 会对源码做粗略检查。
+- 数据串用长括号 `[==[ ... ]==]`：`src/data/dome.lua` 的数据里会出现 `\`，放在普通引号里会被当成转义。
+
+### 按键
+
+- **`rb.buttons` 要先 `require("buttons")` 才有。** 漏了的话所有按键都认不出，连 Menu 都退不出去，真机上发生过。`common.lua` 一开头就加载，失败时退回 Nano 2G 的键值：SELECT 0x01、MENU 0x02、LEFT 0x04、RIGHT 0x08、SCROLL_FWD 0x10、SCROLL_BACK 0x20、PLAY 0x40、REL 0x02000000、REPEAT 0x04000000。
+- 读按键：每帧用 `rb.button_get(false)` 读到空为止。`common.lua` 里的 `poll()` 返回 `{k="fwd"|"back"|"menu"|"select"|"play"|"prev"|"next", rel, rep}`。
+- Select 短按 / 长按：用 `select_gesture(e)`，长按约 0.8 秒。
+
+### 转盘速度（真机实测）
+
+- **数滚动事件分不出快慢。** 转盘一圈 96 格，驱动只在按键队列为空时才发一个滚动事件，中间转过的格数合并进去（见 `firmware/target/arm/ipod/button-clickwheel.c`）。所以每秒事件数封顶在十几个。实测：慢转和用力快拨都在 5～15 个/秒。
+- **要读真实转速，用 `rb.wheel_status()`。** 它返回转盘绝对位置 0..95，手指离开时是 -1。这款机器定义了 `HAVE_WHEEL_POSITION`，真机上可用，Play 读数显示 `pos`。`common.lua` 的 `wheel_speed(window)` 每帧采样，返回「每秒格数（一圈 96）」；读不到时退回数事件（×6），第二个返回值是 `"evt"`。
+- 实测数字，在 golf 里按 Play 能看：
+  - 时间窗 0.2 秒：慢转 50～100，快拨峰值才 105 左右（被窗口摊薄），400 要连续转好几圈。
+  - 所以 golf 用 0.1 秒的窗口，门槛 `AIM_MAX 110`、`SHOT_MIN 170`、`SHOT_FULL 420`。以后调手感，先让用户按 Play 报 `now` 和 `peak`，别再猜。
+- 其他应用仍用事件计数：一个事件 = 一步。瞭望塔 `DEG_PER_CLICK`、陶艺的转速换算还没上机调过。
+
+### 背光
+
+- `rb.backlight_on` 不存在，被 Lua 绑定排除了。要用 `rb.backlight_onoff(true)`。
+- `rb.backlight_force_on()` / `rb.backlight_use_settings()` 存在。`common.lua` 开始时强制常亮，退出时恢复设置。
+
+### 其他 API 备忘
+
+- 画图：`rb.lcd_set_foreground(rb.lcd_rgbpack(r,g,b))`、`rb.lcd_fillrect`、`rb.lcd_putsxy`、`rb.lcd_update()`。全部包在 `common.lua` 的 `fg/rect/text/text_r/rgb/pack/mix/tint` 里。
+- 字体：用 `rb.FONT_SYSFIXED`。默认字体大多没有中文，所以屏幕上不放中文。
+- 时间：`os.time()`，退而 `rb.mktime(rb.get_time())`。Rockbox 的时钟是本地时间，`civil(t)` 直接当本地时间解，不处理时区。
+- 文件：`io.open` 可用。存档是 `key=value` 文本，放在 `/.rockbox/rocks.data/`，写不了就放 `/.rockbox/`。
+- 不能读图片文件：照片要离线转成数据写进脚本（见下面的穹顶）。
+- 查 API 的办法：`apps/plugin.h` 里的函数，大多会被 `apps/plugins/lua/rocklib_aux.pl` 自动导出成 `rb.xxx`，除非在它的 `forbidden_functions` 里；被排除的，看 `rocklib.c` 里有没有手写的版本。
+
+## 代码结构
+
+- `src/common.lua`：共用部分，`build.sh` 会拼到每个应用前面。整数数学、`Rng/hash`、`now/civil/timestr`、`save_kv/load_kv/num`、画图助手、`poll/wheel_rate/wheel_speed/select_gesture`、背光、`light_at(t, shift)` 和 `weather_of(day)`。
+- **光和天气**：穹顶、瞭望塔、高尔夫共用。
+  - `light_at` 按优胜美地的日出日落表，在关键帧之间插值出天顶色、地平线色、地面受光、太阳高度、辉光强度、是否夜里。
+  - `weather_of(day)` 由日期决定，同一天在任何应用里算出来都一样：雨、雾量、云海、风、暴雨方位。
+- **每天的事件都由日期种子决定**，比如瞭望塔的烟、高尔夫的地形，所以不在场时也能补算。
+- `src/data/<名字>.lua`：生成的数据，`build.sh` 会拼在对应应用前面。
+- `dist/`：打包结果，提交进仓库，方便直接下载使用。
+
+## 工具与工作流
+
+- `./tools/build.sh`：打包，`luac -p` 检查语法，粗查 5.1 语法，跑 `check_limits.lua`。
+- `lua test/run.lua <脚本> <帧数> <时间偏移秒> "<按键脚本>"`：桌面上的假 Rockbox。
+  - 按键脚本例子：`fwd*5,wait*10,flick*3,select,longselect,play,next`。`flick` 是一帧 6 个转盘事件。
+  - 它会检查：
+    - 画图参数必须是整数。
+    - 颜色不能越界。
+    - 按 Menu 后 30 帧内必须退出。
+    - `rb.buttons` 只在 `require("buttons")` 之后才有。
+  - 它会模拟：`rb.wheel_status`，每个转盘事件走 6 格；存档写到 `$TMPDIR/rbfs`。
+  - 环境变量：
+    - `SHOWTEXT=1`：打印屏幕上的文字。
+    - `NOBUTTONS=1`：模拟 buttons 模块加载失败。
+    - `NOWHEELPOS=1`：模拟没有 `wheel_status`。
+- `tools/snap.sh <脚本> <帧数> <偏移> "<按键>" <名字>`：跑完把最后一帧放大 3 倍存成 `$TMPDIR/<名字>.png`。
+  - 时间偏移以真实 UTC 计算；要看某个本地时刻，算好偏移再传。
+  - 测试环境不渲染字体，文字显示成浅色方块。
+- `./tools/deploy.sh [--no-eject] [文件夹]`：打包，找到带 `.rockbox` 的盘，拷进 `/Slow/`，然后 `diskutil eject`。在 Claude Code 的沙盒里写不了 `/Volumes`，要在沙盒外运行。
+- `./tools/yosemite.sh`：用 `sips` 把 `no_upload/Yosemite/*.jpg` 转成 940×528 BMP，再用 `tools/yosemite.py`（只用标准库）生成 `src/data/dome.lua`。
+
+## 穹顶的照片场景
+
+- 素材是 12 张优胜美地隧道观景台的 6K 延时照片，同一机位，不同时间：黎明雾、暴风云、晴天、夜里。
+- 裁切 `CROP` 以半穹顶为中心。原图里半穹顶只有十几个像素，裁近之后才看得出形状。
+- 天际线：
+  - 自动识别失败过两次。照片里云、雪、背阴的岩石颜色太接近；用「多帧里变化大」和「任何一帧是蓝色」的规则都不行，远处的岩石因为空气透视也偏蓝。
+  - 现在是手描的 `SKY_POINTS`，再在 ±3 像素里对齐到黎明那帧（山是剪影）的明暗边界。
+  - 要调就改控制点，用网格放大图对照。
+- 材质：按颜色分林子和岩石也失败过（背阴的林子和岩石颜色几乎一样），现在按手描的 `TREELINE` 分。
+- 类别：0 是天空，不存，游戏按光画。1..12 是材质×6 档亮度，颜色取照片平均色，运行时 `tint` 上当前的光。13..24 是同样的类别但在天际线下方 22 行内，日落前后被 `GLOWC` 染成高山辉光。
+- 编码：每行游程，两字符一段：`chr(48+类别)`、`chr(48+长度)`。一共约 3300 段，每次重画就是这么多次 `fillrect`。
+- 雾：4×4 粗格子，浓度 0..14 显示为 4 档，相邻格子的花纹错开。每天的雾源沿山谷的分布由日期种子决定。
+
+## 隐私
+
+- **`no_upload/` 里的东西绝不上传**：不进 git，不发到任何外部服务。已经写在 `.gitignore` 里，只有生成的低分辨率数据 `src/data/dome.lua` 进仓库。
+- 设计文档里有作者署名，这是用户自己的仓库，保留。
+
+## 已知待办
+
+- 上机确认：穹顶拨时间时的重画速度（约 3300 段）、鸟群 15 只的帧率、沙堆随机模式的流畅度。
+- 瞭望塔和陶艺还在用事件计数，可以改用 `wheel_speed` 得到真实转速，改之前先上机看读数。
+- golf 主函数 93 个局部变量，接近 100 的上限。
