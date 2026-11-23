@@ -61,6 +61,26 @@ local function build_order()
   end
 end
 
+-- 附近 r 格内（由近到远）找一格水，返回它的下标。沙子是湿的：水不用紧挨着
+local near_water
+do
+local NEAR = {}
+for dy = -3, 3 do for dx = -3, 3 do
+  if dx ~= 0 or dy ~= 0 then NEAR[#NEAR + 1] = { dy * PW + dx, math.max(iabs(dx), iabs(dy)), dx * dx + dy * dy } end
+end end
+table.sort(NEAR, function(a, b) return a[3] < b[3] end)
+near_water = function(p, r)
+  for k = 1, #NEAR do
+    local n = NEAR[k]
+    if n[2] <= r then
+      local q = p + n[1]
+      if q >= 0 and q < NP and G[q] == WATER then return q end
+    end
+  end
+  return nil
+end
+end
+
 -- ---------- 物理 ----------
 local physics
 do
@@ -71,17 +91,14 @@ local function mv(p, t) -- p 的东西去 t，t 的东西（空或水）回 p
   ST[t] = S.fid; ST[p] = S.fid
   DIRTY[#DIRTY + 1] = p; DIRTY[#DIRTY + 1] = t
 end
-local function sprout(p) -- 种子碰到水：吸掉一格水，变成植物，往重力反方向长一格
+local function sprout(p) -- 种子停稳了、3 格内有水：吸掉一格水，变成植物，往重力反方向长一格
+  local w = near_water(p, 3)
+  if not w then return end
   local d = today()
-  for _, o in ipairs({ 1, -1, PW, -PW }) do
-    if G[p + o] == WATER then
-      set(p + o, EMPTY)
-      set(p, PLANT); PDAY[p] = d; PBORN[p] = d
-      local up = p - OFF[S.dir]
-      if G[up] == EMPTY then set(up, PLANT); PDAY[up] = d; PBORN[up] = d end
-      return
-    end
-  end
+  set(w, EMPTY)
+  set(p, PLANT); PDAY[p] = d; PBORN[p] = d
+  local up = p - OFF[S.dir]
+  if G[up] == EMPTY then set(up, PLANT); PDAY[up] = d; PBORN[up] = d end
 end
 -- 走一帧，返回动了几格
 physics = function()
@@ -115,30 +132,28 @@ physics = function()
 end
 end
 
--- 植物慢慢长：随便挑几格，是挨着水的植物就有机会吸水、往上长一格
+-- 植物慢慢长：随便挑几格，是 2 格内有水的植物就有机会吸水、往上（重力反方向）长一格
 local function grow(tries, chance)
   local d = today()
   local up = OFF[S.dir]
   for _ = 1, tries do
     local p = (rnd(GH) + 1) * PW + rnd(GW) + 1
     if G[p] == PLANT and rnd(chance) == 0 then
-      for _, o in ipairs({ 1, -1, PW, -PW }) do
-        if G[p + o] == WATER then
-          local t = p - up
-          if G[t] ~= EMPTY then t = p - OFF[mod(S.dir + 7 + rnd(3), 8)] end -- 斜上方
-          if G[t] == EMPTY then
-            set(p + o, EMPTY)
-            set(t, PLANT); PDAY[t] = d; PBORN[t] = PBORN[p] or d
-            PDAY[p] = d
-          end
-          break
+      local w = near_water(p, 2)
+      if w then
+        local t = p - up
+        if G[t] ~= EMPTY then t = p - OFF[mod(S.dir + 7 + rnd(3), 8)] end -- 斜上方
+        if G[t] == EMPTY then
+          set(w, EMPTY)
+          set(t, PLANT); PDAY[t] = d; PBORN[t] = PBORN[p] or d
         end
+        PDAY[p] = d
       end
     end
   end
 end
 
--- 查一遍植物：连在一起的算一株；整株只要有一格挨着水就算喝到了；太久没水的枯成沙
+-- 查一遍植物：连在一起的算一株；整株只要有一格 2 格内有水就算喝到了；太久没水的枯成沙
 local function check_plants()
   local d = today()
   local seen, stack = {}, {}
@@ -154,10 +169,10 @@ local function check_plants()
           local p = stack[sp]; sp = sp - 1
           cells[#cells + 1] = p
           if (PBORN[p] or d) < born then born = PBORN[p] end
+          if not wet and near_water(p, 2) then wet = true end
           for _, o in ipairs({ 1, -1, PW, -PW }) do
             local q = p + o
-            if G[q] == WATER then wet = true
-            elseif G[q] == PLANT and not seen[q] then seen[q] = true; sp = sp + 1; stack[sp] = q end
+            if G[q] == PLANT and not seen[q] then seen[q] = true; sp = sp + 1; stack[sp] = q end
           end
         end
         local last = 0

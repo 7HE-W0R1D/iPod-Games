@@ -378,6 +378,7 @@ end
 -- 落子：转盘在合法落点之间跳；Select 落子；Menu 退回选子
 -- 上一首：悔一步   Play：思考时间 3 / 10 / 30 秒   Menu（选子时）：退出
 -- 下一首：电脑对电脑，你只看；再按一次，轮到白方时交还给你
+-- 长按 Select：说明（在说明页按 Play 重开一局）
 
 local SAVE = "slow_chess.txt"
 
@@ -798,8 +799,9 @@ local LIGHT, DARK = { 214, 202, 172 }, { 122, 146, 112 }
 local C = {
   wfill = rgb(246, 243, 232), wline = rgb(40, 36, 32),
   bfill = rgb(46, 42, 40), bline = rgb(10, 8, 8),
-  hint = rgb(240, 196, 70), cursor = rgb(250, 220, 90),
-  strip = rgb(30, 32, 36), ink = rgb(190, 192, 196), dim = rgb(110, 114, 120),
+  hint = rgb(236, 104, 16), cursor = rgb(28, 86, 220),   -- 落点提示橙色，光标蓝色
+  strip = rgb(98, 102, 110), ink = rgb(240, 240, 236), dim = rgb(200, 202, 206), bline2 = rgb(205, 205, 210),
+  helpbg = rgb(24, 26, 30), title = rgb(236, 140, 60),
 }
 -- 每格的底色：普通 / 上一步 / 被将 / 选中 / 思考中
 local TINT = { last = { 236, 214, 120 }, check = { 230, 90, 80 }, sel = { 150, 200, 120 }, think = { 120, 150, 230 } }
@@ -842,11 +844,13 @@ for t = 1, 6 do
       end
       x = x + 1
     end
-    if mod(y, 2) == 1 then
-      for sx = 1, 12, 2 do
-        local ch = string.sub(row, sx, sx)
-        if ch ~= "." then small[#small + 1] = { ch == "o", div(sx - 1, 2), div(y - 1, 2) } end
-      end
+  end
+  -- 缩成 8×8（最近邻），窄条里用
+  for sy = 0, 7 do
+    local row = rows[div(sy * #rows, 8) + 1]
+    for sx = 0, 7 do
+      local ch = string.sub(row, div(sx * 12, 8) + 1, div(sx * 12, 8) + 1)
+      if ch ~= "." then small[#small + 1] = { ch == "o", sx, sy } end
     end
   end
   RUNS[t], SMALL[t] = runs, small
@@ -986,7 +990,7 @@ local function load()
   G.watch = s.watch == "1"
   new_game()
   G.note = nil
-  if not found then return end
+  if not found then G.first = true; return end -- 第一次打开：先看说明
   local hist = {}
   for f, t, p in string.gmatch(s.moves or "", "(%d+),(%d+),(%d+)") do
     hist[#hist + 1] = { f = num(f, 0), t = num(t, 0), p = num(p, 0) }
@@ -1055,18 +1059,18 @@ local function draw_strip()
   if key == G.strip_key then return end
   G.strip_key = key
   fg(C.strip); rect(SX, 0, W - SX, H)
-  for side, y0 in pairs({ [-1] = 4, [1] = 40 }) do
+  for side, y0 in pairs({ [-1] = 3, [1] = 34 }) do
     for k, t in ipairs(lost[side]) do
-      local x = SX + 3 + mod(k - 1, 7) * 6
-      local y = y0 + div(k - 1, 7) * 8
+      local x = SX + 2 + mod(k - 1, 5) * 9
+      local y = y0 + div(k - 1, 5) * 10
       for _, d in ipairs(SMALL[t]) do
-        if d[1] then fg(side == 1 and C.wline or C.ink) else fg(side == 1 and C.wfill or C.bfill) end
+        if d[1] then fg(side == 1 and C.wline or C.bline2) else fg(side == 1 and C.wfill or C.bfill) end
         rect(x + d[2], y + d[3], 1, 1)
       end
     end
   end
   if G.result then
-    text(SX + 4, H - 40, G.result, C.cursor, C.strip)
+    text(SX + 4, H - 40, G.result, C.ink, C.strip)
     text(SX + 4, H - 28, G.wins .. "/" .. G.games, C.ink, C.strip)
   elseif G.note then
     text(SX + 4, H - 28, G.note, C.ink, C.strip)
@@ -1147,9 +1151,63 @@ light_start()
 fg(C.strip); rect(0, 0, W, H)
 render()
 
+local HELP = {
+  "wheel     move cursor",
+  "select    pick / place",
+  "menu      back / quit",
+  "prev      undo",
+  "next      auto play on/off",
+  "play      think 3/10/30s",
+  "hold sel  this help",
+  "",
+  "orange dot    can go here",
+  "orange corner capture",
+  "",
+  "PLAY now: new game",
+  "other keys: close",
+}
+local function open_help()
+  G.help = true
+  fg(C.helpbg); rect(0, 0, W, H)
+  text(4, 2, "CHESS", C.title, C.helpbg)
+  for i, line in ipairs(HELP) do text(4, 2 + i * 9, line, (i >= 12) and C.title or C.ink, C.helpbg) end
+  rb.lcd_update()
+end
+local function close_help()
+  G.help = false
+  G.shown, G.strip_key = {}, ""
+end
+local function select_action()
+  if G.mode == "pick" and #G.pieces > 0 then
+    G.sel = G.pieces[G.cur]
+    G.targets = targets_of(G.sel)
+    G.tcur, G.mode = 1, "target"
+  elseif G.mode == "target" then
+    local t = G.targets[G.tcur]
+    local promo = false
+    for _, m in ipairs(G.legal) do if m.f == G.sel and m.t == t and m.p > 0 then promo = true end end
+    if promo then G.pcur, G.mode = 1, "promo"
+    else G.pending = { f = G.sel, t = t, p = 0 } end
+  elseif G.mode == "promo" then
+    G.pending = { f = G.sel, t = G.targets[G.tcur], p = PROMOS[G.pcur] }
+  elseif G.mode == "over" then
+    new_game()
+  end
+end
+if G.first then open_help() end
+
 while not G.quit do
   for _, e in ipairs(poll()) do
-    if not e.rel then
+    local g = select_gesture(e)
+    if G.help then
+      -- 说明页：Play 重开一局；别的键（转盘除外）关掉说明
+      if (not e.rel and not e.rep and e.k ~= "select" and e.k ~= "fwd" and e.k ~= "back") or g == "short" then
+        if e.k == "play" then new_game() end
+        close_help()
+      end
+    elseif g == "long" then open_help()
+    elseif g == "short" then select_action()
+    elseif not e.rel and e.k ~= "select" then
       local k = e.k
       if k == "menu" then
         if G.mode == "target" then G.mode = "pick"
@@ -1180,22 +1238,6 @@ while not G.quit do
           refresh_turn()
           save()
         end
-      elseif k == "select" and not e.rep then
-        if G.mode == "pick" and #G.pieces > 0 then
-          G.sel = G.pieces[G.cur]
-          G.targets = targets_of(G.sel)
-          G.tcur, G.mode = 1, "target"
-        elseif G.mode == "target" then
-          local t = G.targets[G.tcur]
-          local promo = false
-          for _, m in ipairs(G.legal) do if m.f == G.sel and m.t == t and m.p > 0 then promo = true end end
-          if promo then G.pcur, G.mode = 1, "promo"
-          else G.pending = { f = G.sel, t = t, p = 0 } end
-        elseif G.mode == "promo" then
-          G.pending = { f = G.sel, t = G.targets[G.tcur], p = PROMOS[G.pcur] }
-        elseif G.mode == "over" then
-          new_game()
-        end
       end
     end
   end
@@ -1213,10 +1255,10 @@ while not G.quit do
 
   if G.note and rb.current_tick() > G.note_until then G.note = nil end
   -- 电脑对电脑：一局结束停 10 秒，再开下一局
-  if G.watch and G.mode == "over" and rb.current_tick() > G.over_at + 10 * HZ then new_game() end
-  render()
+  if G.watch and G.mode == "over" and rb.current_tick() > G.over_at + 10 * HZ and not G.help then new_game() end
+  if not G.help then render() end
 
-  if G.mode == "think" then
+  if G.mode == "think" and not G.help then
     local ok = pcall(engine_move)
     if not ok then G.quit = true end
     if not G.quit then save() end

@@ -1,6 +1,6 @@
 -- 洒水器：黄昏的球场，洒水器一个个打开。转盘就是喷头
 -- 转盘：喷头方向（手指在哪，水往哪喷）；转得慢落得近、湿得透，转得快洒得远、只湿一层皮
--- Select：白天手动开 / 关（黄昏自动开，夜里不开）   Menu：退出
+-- 上一首 / 下一首：水量小 / 大   Play：开 / 关（白天手动开；黄昏自动开，也能关；夜里不开）   Menu：退出
 
 local SAVE = "slow_sprinkler.txt"
 local CELL = 4
@@ -10,7 +10,8 @@ local WET_MAX, SOAKED = 12, 8   -- 湿度 0..12；到 8 算“浇透”
 local DRY_SECS = 300            -- 每 5 分钟干一点
 local OPEN_BEFORE, OPEN_AFTER = 30, 40 -- 日落前 30 分钟开，日落后 40 分钟关
 local WHEEL_ZERO = 24           -- 转盘位置 0 对应的喷头方向（24 = 朝上）；上机后按手感调
-local MAXDROP = 40
+local MAXDROP = 60
+local FLOW = { 1, 2, 3, 4, 6 }   -- 水量：每帧喷几滴
 
 -- 32 个方向的余弦 ×64（0 朝右，顺时针，屏幕坐标 y 向下）
 local COS = { [0] = 64, 63, 59, 53, 45, 36, 24, 12, 0, -12, -24, -36, -45, -53, -59, -63,
@@ -26,7 +27,8 @@ local HEAD, BIRD = { 150, 150, 158 }, { 40, 36, 34 }
 local HL, WV, WD = {}, {}, {}    -- 健康；湿度；最后一次浇透是哪天
 local DIRTY = {}
 local AUTO = {}                  -- 远处自动洒水器管的格子
-local S = { day = div(now(), 86400), dry_t = now(), rain_day = -1, manual = false, aim = 24 }
+local S = { day = div(now(), 86400), dry_t = now(), rain_day = -1, manual = false, aim = 24,
+            flow = 2, flow_until = 0, auto_off = false }
 local drops = {}
 local rnd = Rng(rb.current_tick() + now())
 local PAL = {}                   -- [健康*4+湿] → 颜色，跟着光变
@@ -198,6 +200,7 @@ local function load()
     S.dry_t = num(s.dry_t, S.dry_t)
     S.rain_day = num(s.rain_day, -1)
     S.aim = clamp(num(s.aim, 24), 0, 31)
+    S.flow = clamp(num(s.flow, 2), 1, #FLOW)
   else -- 第一次：大片是绿的，有几块发黄
     for i = 1, N do HL[i] = 3 end
     for _ = 1, 4 do
@@ -222,7 +225,7 @@ local function save()
     ds[i] = clamp(S.day - WD[i], 0, 9)
   end
   save_kv(SAVE, { health = table.concat(hs), wet = table.concat(ws), wday = table.concat(ds),
-                  day = S.day, dry_t = S.dry_t, rain_day = S.rain_day, aim = S.aim })
+                  day = S.day, dry_t = S.dry_t, rain_day = S.rain_day, aim = S.aim, flow = S.flow })
 end
 
 -- ---------- 画面 ----------
@@ -262,8 +265,13 @@ while running do
     elseif (e.k == "fwd" or e.k == "back") and not e.rel and last_pos < 0 then
       -- 读不到转盘位置时，退回数事件转喷头
       S.aim = mod(S.aim + ((e.k == "fwd") and 1 or -1), 32)
-    elseif select_gesture(e) == "short" then
-      if phase(L) == "day" then S.manual = not S.manual end
+    elseif (e.k == "prev" or e.k == "next") and not e.rel then
+      S.flow = clamp(S.flow + ((e.k == "next") and 1 or -1), 1, #FLOW)
+      S.flow_until = rb.current_tick() + 2 * HZ
+    elseif e.k == "play" and not e.rel and not e.rep then
+      local ph = phase(L)
+      if ph == "day" then S.manual = not S.manual
+      elseif ph == "auto" then S.auto_off = not S.auto_off end
     end
   end
 
@@ -283,11 +291,12 @@ while running do
   end
   local ph = phase(L)
   if ph ~= "day" then S.manual = false end
-  local open = (ph == "auto") or S.manual
+  if ph ~= "auto" then S.auto_off = false end
+  local open = (ph == "auto" and not S.auto_off) or S.manual
 
   if open then
     local sp = wheel_speed(div(HZ, 5))
-    for _ = 1, 2 do
+    for _ = 1, FLOW[S.flow] do
       if sp > 150 then spray(CX, CY, S.aim, 9 + rnd(7), 2, 1)   -- 快：远、散、薄
       else spray(CX, CY, S.aim, 5 + rnd(5), 1, 3) end            -- 慢：近、集中、透
     end
@@ -312,6 +321,18 @@ while running do
     fg(pack(BIRD))
     rect(bird.x, bird.y + 1, 4, 2)
     if mod(div(frame, 4), 2) == 0 or bird.vx == 0 then rect(bird.x + 1, bird.y, 1, 1) end
+  end
+  -- 换水量时，左上角亮 2 秒的刻度
+  if S.flow_until > 0 then
+    if rb.current_tick() < S.flow_until then
+      for k = 1, #FLOW do
+        fg((k <= S.flow) and dc or pack(tint(HEAD, L.land)))
+        rect(3 + (k - 1) * 5, 11 - k * 2, 3, k * 2)
+      end
+    else
+      S.flow_until = 0
+      for x = 0, 28, CELL do for y = 0, 12, CELL do mark_px(x, y) end end
+    end
   end
   rb.lcd_update()
   keep_light()
