@@ -2,7 +2,7 @@
 -- 选子：转盘在能动的棋子之间跳，落点提示跟着显示；Select 选中
 -- 落子：转盘在合法落点之间跳；Select 落子；Menu 退回选子
 -- 上一首：悔一步   Play：思考时间 3 / 10 / 30 秒   Menu（选子时）：退出
--- 下一首：电脑对电脑，你只看；再按一次，轮到白方时交还给你
+-- 下一首：电脑对电脑，你只看；再按一次，轮到白方时交还给你。观战时 Play 切换每步 5 / 10 / 20 秒
 -- 长按 Select：说明（在说明页按 Play 重开一局）
 
 local SAVE = "slow_chess.txt"
@@ -497,11 +497,12 @@ end
 
 -- ---------- 状态 ----------
 local LEVELS = { 3, 10, 30 }
+local PACES = { 5, 10, 20 }      -- 电脑对电脑：每步至少隔几秒
 local G = {
   mode = "pick", level = 1, hist = {}, legal = {}, pieces = {}, targets = {},
   cur = 1, tcur = 1, pcur = 1, sel = 0, last_f = 0, last_t = 0, think_f = 0, think_t = 0,
   games = 0, wins = 0, undos = 0, last_undos = 0, result = nil, note = nil, note_until = 0,
-  quit = false, shown = {}, strip_key = "", watch = false, over_at = 0, reps = {}, half = 0,
+  quit = false, shown = {}, strip_key = "", watch = false, pace = 2, wait_until = 0, over_at = 0, reps = {}, half = 0,
 }
 local PROMOS = { 5, 4, 3, 2 }
 
@@ -510,7 +511,7 @@ local function save()
   for i, m in ipairs(G.hist) do h[i] = m.f .. "," .. m.t .. "," .. m.p end
   save_kv(SAVE, { moves = table.concat(h, ";"), level = G.level, games = G.games, wins = G.wins,
                   undos = G.undos, last_undos = G.last_undos, result = G.result or "",
-                  watch = G.watch and 1 or 0 })
+                  watch = G.watch and 1 or 0, pace = G.pace })
 end
 
 -- 轮到玩家：算出能动的棋子和各自的落点
@@ -613,6 +614,7 @@ local function load()
   G.games, G.wins = num(s.games, 0), num(s.wins, 0)
   G.last_undos = num(s.last_undos, 0)
   G.watch = s.watch == "1"
+  G.pace = clamp(num(s.pace, 2), 1, #PACES)
   new_game()
   G.note = nil
   if not found then G.first = true; return end -- 第一次打开：先看说明
@@ -673,7 +675,7 @@ local function draw_strip()
   end end
   local START = { 8, 2, 2, 2, 1, 1 }
   local lost = { [1] = {}, [-1] = {} }
-  local key = G.mode .. (G.result or "") .. G.level .. (G.note or "") .. (G.watch and "w" or "")
+  local key = G.mode .. (G.result or "") .. G.level .. (G.note or "") .. (G.watch and ("w" .. G.pace) or "")
   for _, s in ipairs({ 1, -1 }) do
     for _, t in ipairs({ 5, 4, 3, 2, 1 }) do
       local n = START[t] - count[s][t]
@@ -700,7 +702,8 @@ local function draw_strip()
   elseif G.note then
     text(SX + 4, H - 28, G.note, C.ink, C.strip)
   end
-  text(SX + 4, H - 14, (G.watch and "auto " or "") .. LEVELS[G.level] .. "s", G.watch and C.ink or C.dim, C.strip)
+  if G.watch then text(SX + 4, H - 14, "auto " .. PACES[G.pace] .. "s", C.ink, C.strip)
+  else text(SX + 4, H - 14, LEVELS[G.level] .. "s", C.dim, C.strip) end
 end
 
 local function render()
@@ -747,6 +750,7 @@ local function think_hook(f, t)
   if rb.yield then rb.yield() end
 end
 local function engine_move()
+  local started = rb.current_tick()
   local secs = LEVELS[G.level]
   -- 它输了不认输，只是想得越来越久
   local ev = 0
@@ -759,6 +763,8 @@ local function engine_move()
   G.think_f, G.think_t = 0, 0
   if not f then return end
   G.last_eval = sc
+  -- 观战：这一步从开始想到现在不够节奏的秒数，就停着等够再走下一步
+  G.wait_until = started + PACES[G.pace] * HZ
   local m = { f = f, t = t, p = p }
   play_move(m)
   G.hist[#G.hist + 1] = m
@@ -783,8 +789,8 @@ local HELP = {
   "prev      undo",
   "next      auto play on/off",
   "play      think 3/10/30s",
+  "  (auto: 5/10/20s a move)",
   "hold sel  this help",
-  "",
   "orange dot    can go here",
   "orange corner capture",
   "",
@@ -844,10 +850,12 @@ while not G.quit do
         elseif G.mode == "target" then G.tcur = mod(G.tcur - 1 + d, #G.targets) + 1
         elseif G.mode == "promo" then G.pcur = mod(G.pcur - 1 + d, #PROMOS) + 1 end
       elseif k == "play" and not e.rep then
-        G.level = mod(G.level, #LEVELS) + 1
+        if G.watch then G.pace = mod(G.pace, #PACES) + 1
+        else G.level = mod(G.level, #LEVELS) + 1 end
       elseif k == "next" and not e.rep then
         G.watch = not G.watch
         if G.watch and (G.mode == "pick" or G.mode == "target" or G.mode == "promo") then G.mode = "think" end
+        if not G.watch and G.mode == "think" and E.side() == 1 then G.mode = "pick"; refresh_turn() end
       elseif k == "prev" and not e.rep and (G.mode == "pick" or G.mode == "target") then
         -- 悔棋：退回到上一次轮到你的时候
         local h = G.hist
@@ -883,7 +891,8 @@ while not G.quit do
   if G.watch and G.mode == "over" and rb.current_tick() > G.over_at + 10 * HZ and not G.help then new_game() end
   if not G.help then render() end
 
-  if G.mode == "think" and not G.help then
+  local waiting = G.watch and rb.current_tick() < (G.wait_until or 0)
+  if G.mode == "think" and not G.help and not waiting then
     local ok = pcall(engine_move)
     if not ok then G.quit = true end
     if not G.quit then save() end
