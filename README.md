@@ -1,18 +1,19 @@
 # iPod Nano 2 慢应用
 
-六个跑在 iPod Nano 第二代（[Rockbox](https://www.rockbox.org/) 固件）上的 Lua 小程序。它们几乎不需要你做什么：规则很少，画面跟着真实的时间和季节慢慢变，你只是偶尔路过看一眼。
+七个跑在 iPod Nano 第二代（[Rockbox](https://www.rockbox.org/) 固件）上的 Lua 小程序。它们几乎不需要你做什么：规则很少，画面跟着真实的时间和季节慢慢变，你只是偶尔路过看一眼。
 
-Six slow, ambient Lua apps for the iPod Nano 2G running Rockbox: a sandpile, a flock of birds, Half Dome in fog, a fire lookout tower, a pottery wheel, and a quiet one-hole golf course.
+Seven slow, ambient Lua apps for the iPod Nano 2G running Rockbox: a sandpile, a flock of birds, Half Dome in fog, a fire lookout tower, a pottery wheel, a quiet one-hole golf course, and a Game of Life whose rules turn with the wheel.
 
 | | |
 | --- | --- |
 | ![沙堆](screenshots/01_sandpile_center.png) | ![鸟群](screenshots/03_flock_day.png) |
 | ![穹顶与雾霭](screenshots/08_dome_alpenglow.png) | ![瞭望塔](screenshots/12_tower_smoke.png) |
 | ![陶艺转盘](screenshots/16_pottery_shelf.png) | ![高尔夫](screenshots/18_golf_evening.png) |
+| ![规则旋钮：生命游戏](screenshots/19_rules_life.png) | ![规则旋钮：迷宫](screenshots/20_rules_maze.png) |
 
 完整的设计思路见 [iPod Nano 2 慢应用.md](iPod%20Nano%202%20慢应用.md)。
 
-## 六个应用
+## 七个应用
 
 ### 沙堆 `sandpile.lua`
 
@@ -90,15 +91,28 @@ Six slow, ambient Lua apps for the iPod Nano 2G running Rockbox: a sandpile, a f
   - Select 看一眼杆数。
 - **Play**：显示转盘速度读数，用来调手感。
 
+### 规则旋钮 `rules.lua`
+
+一个生命游戏的宇宙，转盘转的不是时间，而是它的物理规则。
+
+- **规则**：26 条，按“相近”排好，相邻两条只差一两个数字。换规则时不清屏，当前的图案直接在新规则下继续演化。
+- **颜色**：刚出生的格子亮，活得越久颜色越深。
+- **角落数字**：规则编号。规则本身不显示，要看它的行为去认。
+- **不在场时**：每 5 分钟走一代，打开时快进补算，最多 600 代。进入循环就直接跳过，角落显示 `loop`。
+- **操作**：
+  - 转盘：换规则。转动时演化变慢，停住 2 秒后恢复。
+  - Select：收藏当前的宇宙，最多 8 个。
+  - 长按 Select：在中间撒一把活格子。
+  - Play：看收藏。转盘翻页；Select 把这个收藏搬回主宇宙。
+
 所有应用都是 Menu 退出，进度自动保存。
 
 ## 计划中
 
-另外四个应用已经有设计，还没开始写：
+另外三个应用已经有设计，还没开始写：
 
 - **洒水器**：只在每天黄昏开放，用转盘控制喷头方向。
 - **旋转重力**：转盘转动沙盒的重力方向。
-- **规则旋钮**：转盘切换生命游戏的规则。
 - **国际象棋**：和机器下棋，能看到对手在考虑哪几步。
 
 开发顺序和做法见 [新应用开发计划.md](新应用开发计划.md)。

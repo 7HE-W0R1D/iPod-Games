@@ -1,0 +1,670 @@
+-- 由 tools/build.sh 生成，改源码请改 src/ 下的文件
+-- ==== 共用部分（build.sh 会把它拼到每个游戏前面） ====
+-- 注意：Rockbox 的 Lua 只有整数。除法一律用 div()，不要直接写 a / b。
+
+local rb = rb
+local W = rb.LCD_WIDTH or 176
+local H = rb.LCD_HEIGHT or 132
+local HZ = rb.HZ or 100
+
+-- ---------- 整数数学 ----------
+local function div(a, b) -- 向下取整的除法，b > 0
+  if a >= 0 then return math.floor(a / b) end
+  return -math.floor((-a + b - 1) / b)
+end
+local function mod(a, b) return a - div(a, b) * b end
+local function clamp(v, lo, hi)
+  if v < lo then return lo elseif v > hi then return hi end
+  return v
+end
+local function iabs(v) if v < 0 then return -v end return v end
+local function lerp(a, b, num, den) return a + div((b - a) * num, den) end
+
+-- 小随机数发生器（ZX81 式线性同余，不会溢出 32 位）
+local function Rng(seed)
+  local s = mod(seed, 65536) + 1
+  return function(n)
+    s = mod(s * 75 + 74, 65537)
+    return mod(s, n)
+  end
+end
+local function hash(a, b) return mod(a * 7919 + b * 104729 + 12345, 65521) end
+
+-- ---------- 时间 ----------
+-- 注意：Rockbox 的 Lua 每个函数最多 100 个 local、30 个 upvalue。
+-- 只给游戏用的名字放在外面，内部用的都包在 do ... end 里。
+local now
+do
+local fallback_t0
+now = function()
+  if os and os.time then
+    local ok, t = pcall(os.time)
+    if ok and type(t) == "number" and t > 1000000000 then return math.floor(t) end
+  end
+  if rb.mktime and rb.get_time then
+    local ok, t = pcall(function() return rb.mktime(rb.get_time()) end)
+    if ok and type(t) == "number" and t > 1000000000 then return t end
+  end
+  if not fallback_t0 then fallback_t0 = 1795435200 end -- 找不到时钟：假装是某天中午
+  return fallback_t0 + div(rb.current_tick(), HZ)
+end
+end
+
+-- unix 秒 → 日期（Rockbox 的时钟就是本地时间，所以这里不处理时区）
+local function civil(t)
+  local days = div(t, 86400)
+  local secs = t - days * 86400
+  local z = days + 719468
+  local era = div(z, 146097)
+  local doe = z - era * 146097
+  local yoe = div(doe - div(doe, 1460) + div(doe, 36524) - div(doe, 146096), 365)
+  local y = yoe + era * 400
+  local doy = doe - (365 * yoe + div(yoe, 4) - div(yoe, 100))
+  local mp = div(5 * doy + 2, 153)
+  local d = doy - div(153 * mp + 2, 5) + 1
+  local m = mp < 10 and mp + 3 or mp - 9
+  if m <= 2 then y = y + 1 end
+  return { y = y, m = m, d = d, hh = div(secs, 3600), mm = mod(div(secs, 60), 60),
+           ss = mod(secs, 60), day = days, min = div(secs, 60) }
+end
+local function timestr(t)
+  local c = civil(t)
+  return string.format("%04d-%02d-%02d %02d:%02d", c.y, c.m, c.d, c.hh, c.mm)
+end
+
+-- ---------- 存档（key=value 每行一条） ----------
+local save_kv, load_kv
+do
+local DATA_DIRS = { "/.rockbox/rocks.data/", "/.rockbox/" }
+save_kv = function(name, t)
+  for _, dir in ipairs(DATA_DIRS) do
+    local f = io.open(dir .. name, "w")
+    if f then
+      for k, v in pairs(t) do f:write(k, "=", tostring(v), "\n") end
+      f:close()
+      return true
+    end
+  end
+  return false
+end
+load_kv = function(name)
+  local t = {}
+  for _, dir in ipairs(DATA_DIRS) do
+    local f = io.open(dir .. name, "r")
+    if f then
+      while true do
+        local line = f:read("*l")
+        if not line then break end
+        local k, v = string.match(line, "^([^=]+)=(.*)$")
+        if k then t[k] = v end
+      end
+      f:close()
+      return t, true
+    end
+  end
+  return t, false
+end
+end
+local function num(v, default)
+  local n = tonumber(v)
+  if n == nil then return default end
+  return math.floor(n)
+end
+
+-- ---------- 画图 ----------
+local function rgb(r, g, b) return rb.lcd_rgbpack(clamp(r, 0, 255), clamp(g, 0, 255), clamp(b, 0, 255)) end
+local function fg(c) rb.lcd_set_foreground(c) end
+local function rect(x, y, w, h) if w > 0 and h > 0 then rb.lcd_fillrect(x, y, w, h) end end
+local function mix(c1, c2, num_, den) -- c1/c2 是 {r,g,b}
+  return { lerp(c1[1], c2[1], num_, den), lerp(c1[2], c2[2], num_, den), lerp(c1[3], c2[3], num_, den) }
+end
+local function tint(c, t) -- t 是 {r,g,b}，每个 0..256
+  return { div(c[1] * t[1], 256), div(c[2] * t[2], 256), div(c[3] * t[3], 256) }
+end
+local function pack(c) return rgb(c[1], c[2], c[3]) end
+
+if rb.FONT_SYSFIXED and rb.lcd_setfont then pcall(rb.lcd_setfont, rb.FONT_SYSFIXED) end
+local function text_size(s)
+  if rb.lcd_getstringsize then
+    local w, h = rb.lcd_getstringsize(s)
+    if w then return w, h end
+  end
+  return #s * 6, 8
+end
+local function text(x, y, s, c, bg)
+  if bg then rb.lcd_set_background(bg) end
+  fg(c)
+  rb.lcd_putsxy(x, y, s)
+end
+local function text_r(xr, y, s, c, bg) -- 右对齐
+  local w = text_size(s)
+  text(xr - w, y, s, c, bg)
+end
+
+-- ---------- 按键与转盘 ----------
+local poll, wheel_rate, wheel_speed, select_gesture
+do
+-- rb.buttons 要 require("buttons") 之后才有；万一加载失败，就用 iPod Nano 2G 的键值
+pcall(require, "buttons")
+local BT = rb.buttons or {
+  BUTTON_NONE = 0, BUTTON_SELECT = 0x01, BUTTON_MENU = 0x02, BUTTON_LEFT = 0x04, BUTTON_RIGHT = 0x08,
+  BUTTON_SCROLL_FWD = 0x10, BUTTON_SCROLL_BACK = 0x20, BUTTON_PLAY = 0x40,
+  BUTTON_REL = 0x02000000, BUTTON_REPEAT = 0x04000000,
+}
+local KEY = {
+  [BT.BUTTON_MENU or -1] = "menu", [BT.BUTTON_SELECT or -2] = "select",
+  [BT.BUTTON_PLAY or -3] = "play", [BT.BUTTON_LEFT or -4] = "prev",
+  [BT.BUTTON_RIGHT or -5] = "next", [BT.BUTTON_SCROLL_FWD or -6] = "fwd",
+  [BT.BUTTON_SCROLL_BACK or -7] = "back",
+}
+local B_REL = BT.BUTTON_REL or 0x02000000
+local B_REP = BT.BUTTON_REPEAT or 0x04000000
+local function has_flag(b, f) return mod(div(b, f), 2) == 1 end
+
+-- 转盘：记录最近的点击时间，算速度（每秒格数）
+local wheel_ticks = {}
+local function wheel_note()
+  local t = rb.current_tick()
+  wheel_ticks[#wheel_ticks + 1] = t
+  if #wheel_ticks > 80 then table.remove(wheel_ticks, 1) end
+end
+wheel_rate = function(window) -- window 单位 tick；返回 每秒事件数（转得快时会被合并，最多十几）
+  local t = rb.current_tick()
+  local n = 0
+  for i = #wheel_ticks, 1, -1 do
+    if t - wheel_ticks[i] <= window then n = n + 1 else break end
+  end
+  return div(n * HZ, window)
+end
+
+-- 真实转速：每帧读转盘的绝对位置（一圈 96 格，手指离开时是 -1）。
+-- 转盘事件在转得快时会被系统合并，靠数事件分不出快慢，所以要读位置。
+local pos_last, pos_hist = -1, {}
+local has_pos = rb.wheel_status ~= nil
+local function sample_wheel()
+  if not has_pos then return end
+  local ok, p = pcall(rb.wheel_status)
+  if not ok or type(p) ~= "number" then has_pos = false; return end
+  if p >= 0 and pos_last >= 0 then
+    local d = mod(p - pos_last + 48, 96) - 48
+    if d ~= 0 then
+      pos_hist[#pos_hist + 1] = { rb.current_tick(), iabs(d) }
+      if #pos_hist > 60 then table.remove(pos_hist, 1) end
+    end
+  end
+  pos_last = p
+end
+-- 返回 每秒转过多少格（一圈 96 格），第二个值说明来源："pos" 真实位置 / "evt" 只能数事件
+wheel_speed = function(window)
+  if not has_pos then return wheel_rate(window) * 6, "evt" end -- 一个事件约等于 6 格
+  local t = rb.current_tick()
+  local n = 0
+  for i = #pos_hist, 1, -1 do
+    if t - pos_hist[i][1] <= window then n = n + pos_hist[i][2] else break end
+  end
+  return div(n * HZ, window), "pos"
+end
+
+-- 读出这一帧所有按键事件：{ {k="fwd"}, {k="select", rel=true}, ... }
+poll = function()
+  sample_wheel()
+  local ev = {}
+  for _ = 1, 64 do
+    local b = rb.button_get(false)
+    if not b or b == 0 or b == BT.BUTTON_NONE then break end
+    if b > 0 then -- 负数/超大值是系统事件，忽略
+      local rel, rep = has_flag(b, B_REL), has_flag(b, B_REP)
+      local base = b
+      if rel then base = base - B_REL end
+      if rep then base = base - B_REP end
+      local k = KEY[base]
+      if k then
+        if (k == "fwd" or k == "back") and not rel then wheel_note() end
+        ev[#ev + 1] = { k = k, rel = rel, rep = rep }
+      end
+    end
+  end
+  return ev
+end
+
+-- Select 短按/长按识别。每帧把事件喂进来，返回 "short" / "long" / nil
+local sel_down, sel_long_fired = nil, false
+select_gesture = function(e)
+  if e.k ~= "select" then return nil end
+  if e.rel then
+    local was = sel_down
+    sel_down = nil
+    if was and not sel_long_fired then return "short" end
+    sel_long_fired = false
+    return nil
+  end
+  if not sel_down then sel_down = rb.current_tick(); sel_long_fired = false end
+  if not sel_long_fired and rb.current_tick() - sel_down >= div(HZ * 4, 5) then
+    sel_long_fired = true
+    return "long"
+  end
+  return nil
+end
+end
+
+-- ---------- 背光 ----------
+local keep_light, light_start, light_end
+do
+local KEEP_LIGHT = true
+local last_bl = 0
+keep_light = function()
+  if not KEEP_LIGHT then return end
+  local t = rb.current_tick()
+  if t - last_bl > 3 * HZ then
+    last_bl = t
+    -- Rockbox 的 Lua 里叫 backlight_onoff(true)，没有 backlight_on
+    if rb.backlight_onoff then pcall(rb.backlight_onoff, true) end
+  end
+end
+light_start = function()
+  if KEEP_LIGHT and rb.backlight_force_on then pcall(rb.backlight_force_on) end
+end
+light_end = function()
+  if rb.backlight_use_settings then pcall(rb.backlight_use_settings) end
+end
+end
+
+-- ---------- 共用的光和天气（穹顶、瞭望塔、高尔夫） ----------
+local light_at, weather_of
+do
+-- 优胜美地大致的日出日落（本地时间，分钟）
+local SUNRISE = { 435, 410, 425, 400, 360, 340, 350, 375, 400, 425, 400, 425 }
+local SUNSET = { 1015, 1050, 1135, 1165, 1195, 1215, 1210, 1180, 1135, 1090, 1015, 1000 }
+local SEASON = { -100, -80, -30, 20, 60, 100, 100, 70, 30, -20, -70, -100 } -- 冬 -100 … 夏 100
+
+-- 关键帧：{锚点, 偏移分钟, 天顶色, 地平线色, 地面受光(0..256)}
+local KEYS = {
+  { "sr", -70, { 8, 10, 28 }, { 18, 22, 48 }, { 45, 50, 85 } },
+  { "sr", -30, { 40, 50, 90 }, { 120, 130, 160 }, { 90, 100, 140 } },   -- 黎明灰蓝
+  { "sr", 30, { 90, 130, 190 }, { 215, 222, 235 }, { 185, 198, 225 } }, -- 清晨冷白
+  { "noon", 0, { 70, 130, 210 }, { 180, 205, 230 }, { 240, 240, 232 } }, -- 正午平淡
+  { "ss", -80, { 90, 120, 190 }, { 240, 205, 160 }, { 250, 220, 185 } },
+  { "ss", -15, { 110, 90, 150 }, { 250, 140, 110 }, { 225, 150, 130 } }, -- 傍晚橘粉
+  { "ss", 15, { 60, 40, 90 }, { 140, 80, 110 }, { 115, 85, 120 } },
+  { "ss", 50, { 25, 15, 50 }, { 60, 35, 80 }, { 65, 55, 100 } },        -- 入夜深紫
+  { "ss", 90, { 8, 10, 28 }, { 18, 22, 48 }, { 45, 50, 85 } },
+}
+
+-- t: unix 秒；shift: 额外的分钟偏移（转盘拨时间用）
+light_at = function(t, shift)
+  local c = civil(t + (shift or 0) * 60)
+  local m, mins = c.m, c.min
+  local sr, ss = SUNRISE[m], SUNSET[m]
+  local season = SEASON[m]
+  local noon = div(sr + ss, 2)
+  local stretch = 100 + (season > 0 and div(season * 35, 100) or 0) -- 夏天傍晚更长
+  local pts = {}
+  for i, k in ipairs(KEYS) do
+    local at
+    if k[1] == "sr" then at = sr + k[2]
+    elseif k[1] == "ss" then at = ss + div(k[2] * stretch, 100)
+    else at = noon end
+    pts[i] = at
+  end
+  -- 找到所在的两个关键帧（首尾跨午夜相接）
+  local n = #KEYS
+  local a, b, num_, den
+  if mins < pts[1] or mins >= pts[n] then
+    a, b = n, 1
+    local span = pts[1] + 1440 - pts[n]
+    num_ = mins >= pts[n] and mins - pts[n] or mins + 1440 - pts[n]
+    den = span
+  else
+    for i = 1, n - 1 do
+      if mins >= pts[i] and mins < pts[i + 1] then
+        a, b, num_, den = i, i + 1, mins - pts[i], pts[i + 1] - pts[i]
+        break
+      end
+    end
+  end
+  local ka, kb = KEYS[a], KEYS[b]
+  local top, bot, land = mix(ka[3], kb[3], num_, den), mix(ka[4], kb[4], num_, den), mix(ka[5], kb[5], num_, den)
+  -- 冬天更冷更低
+  if season < 0 then
+    local w = -season
+    top = { top[1] - div(15 * w, 100), top[2], top[3] + div(15 * w, 100) }
+    bot = { bot[1] - div(12 * w, 100), bot[2], bot[3] + div(10 * w, 100) }
+    land = { land[1] - div(25 * w, 100), land[2] - div(10 * w, 100), land[3] }
+  end
+  -- 太阳高度 0..1000（白天），夜里为负（日落后分钟数的相反数）
+  local sun
+  if mins >= sr and mins <= ss then
+    local maxh = 700 + div(season * 3, 1) -- 冬天低、夏天高
+    sun = div(4 * (mins - sr) * (ss - mins) * div(maxh, 10), (ss - sr) * (ss - sr)) * 10
+  elseif mins > ss then sun = -(mins - ss)
+  else sun = -(sr - mins) end
+  -- 高山辉光：日落前后十来分钟，峰顶还亮着
+  local glow = 0
+  local g0, g1, g2 = ss - 8, ss + 4, ss + div(16 * stretch, 100)
+  if mins >= g0 and mins < g1 then glow = div((mins - g0) * 256, g1 - g0)
+  elseif mins >= g1 and mins < g2 then glow = 256 - div((mins - g1) * 256, g2 - g1) end
+  local dawn_glow = 0
+  if mins >= sr - 12 and mins < sr + 6 then dawn_glow = 120 - div(iabs(mins - (sr - 3)) * 120, 15) end
+  if dawn_glow > glow then glow = clamp(dawn_glow, 0, 256) end
+  local night = mins < sr - 60 or mins > ss + div(75 * stretch, 100)
+  return { top = top, bot = bot, land = land, sun = sun, glow = glow, night = night,
+           min = mins, sr = sr, ss = ss, month = m, season = season, day = c.day }
+end
+
+-- 每天的天气（同一天任何地方算出来都一样）
+local RAIN = { 35, 35, 30, 20, 10, 3, 2, 2, 5, 12, 25, 35 }
+local FOG = { 70, 60, 40, 30, 15, 8, 5, 5, 10, 25, 50, 70 }
+weather_of = function(day)
+  local c = civil(day * 86400)
+  local r = Rng(hash(day, 31))
+  local rainy = r(100) < RAIN[c.m]
+  local yr = Rng(hash(day - 1, 31))
+  local rained_yesterday = yr(100) < RAIN[civil((day - 1) * 86400).m]
+  local fog = FOG[c.m] + (rained_yesterday and 35 or 0) + r(41) - 20
+  if not rainy and c.m >= 6 and c.m <= 8 and r(3) == 0 then fog = 0 end -- 晴朗夏日可能整天无雾
+  fog = clamp(fog, 0, 100)
+  return {
+    rainy = rainy, fog = fog,
+    inversion = fog > 45 and r(100) < 15, -- 雾停在半山腰
+    wind = r(7) - 3,
+    storm_start = 600 + r(480), storm_bearing = r(360), storm_dir = r(2) == 0 and -1 or 1,
+  }
+end
+end
+-- ==== 共用部分结束 ====
+
+-- 规则旋钮：一个生命游戏的宇宙，转盘转的是它的物理规则
+-- 转盘：换规则   Select：收藏这个宇宙   长按 Select：在中间撒一把活格子
+-- Play：看收藏（转盘翻，Select 把它搬回来）   Menu：退出
+
+local SAVE = "slow_rules.txt"
+local CELL = 4
+local GW, GH = div(W, CELL), div(H, CELL) -- 44 × 33
+local N = GW * GH
+local MAX_FAV = 8
+local BG_SECS = 300      -- 不在场时每 5 分钟走一代
+local CATCHUP_MAX = 600  -- 打开时最多补 600 代（约两天）
+local LIVE_PERIOD = div(HZ, 5)  -- 平时每秒 5 代
+local TURN_PERIOD = div(HZ, 2)  -- 转盘刚动过：每秒 2 代
+local TURN_HOLD = 2 * HZ        -- 转盘停住 2 秒后恢复
+
+-- 按“相近”排好的规则表：相邻两条只差几个数字（在桌面上用汉明距离贪心排的）
+local RULES = {
+  "B3/S23", "B3/S023", "B37/S23", "B36/S23", "B38/S23", "B3/S1234", "B3/S12345",
+  "B36/S125", "B368/S245", "B34/S456", "B34/S34", "B234/S", "B2/S", "B2/S0",
+  "B3/S45678", "B3/S012345678", "B378/S235678", "B3678/S235678", "B4678/S35678",
+  "B3678/S34678", "B35678/S5678", "B357/S1358", "B357/S238", "B1357/S02468",
+  "B1357/S1357", "B45678/S2345",
+}
+
+local BG = rgb(14, 16, 22)
+local BAND = { [0] = BG, rgb(235, 238, 215), rgb(110, 185, 165), rgb(45, 95, 110) }
+local INK = rgb(150, 160, 170)
+local HI = rgb(240, 200, 90)
+
+-- ---------- 宇宙 ----------
+-- A/A2：活 1 死 0（两份轮流用）；AGE：活了几代，封顶 99
+local A, A2, AGE, SHOWN = {}, {}, {}, {}
+local world = { rule = 1, t = now() } -- t：这个宇宙已经算到的时刻
+local favs = {}                       -- { {rule=, t=, cells=字符串}, ... }
+local rnd = Rng(rb.current_tick() + world.t)
+local BORN, SURV = {}, {}
+
+local function set_rule(r)
+  world.rule = r
+  for n = 0, 8 do BORN[n] = false; SURV[n] = false end
+  local s = RULES[r]
+  local b, sv = string.match(s, "^B(%d*)/S(%d*)$")
+  for k = 1, #b do BORN[tonumber(string.sub(b, k, k))] = true end
+  for k = 1, #sv do SURV[tonumber(string.sub(sv, k, k))] = true end
+end
+
+-- 存成字符串：每格一个字符，0 是死，1..9 是年龄（封顶 9）
+local function encode()
+  local p = {}
+  for i = 1, N do local a = AGE[i]; if a > 9 then a = 9 end; p[i] = a end
+  return table.concat(p)
+end
+local function decode(s)
+  for i = 1, N do
+    local a = num(string.sub(s or "", i, i), 0)
+    AGE[i] = a
+    A[i] = (a > 0) and 1 or 0
+  end
+end
+local function seed(x0, y0, w, h, pct)
+  for y = y0, y0 + h - 1 do
+    for x = x0, x0 + w - 1 do
+      local i = y * GW + x + 1
+      if rnd(100) < pct then A[i] = 1; if AGE[i] == 0 then AGE[i] = 1 end end
+    end
+  end
+end
+
+-- ---------- 一代 ----------
+local step, recent_clear, recent_check
+do
+local col, XL, XR, YU, YD = {}, {}, {}, {}, {}
+for x = 0, GW - 1 do XL[x] = mod(x - 1, GW); XR[x] = mod(x + 1, GW) end
+for y = 0, GH - 1 do YU[y] = mod(y - 1, GH) * GW + 1; YD[y] = mod(y + 1, GH) * GW + 1 end
+local seen, seen_n, gen = {}, 0, 0
+-- 走一代，返回这一代的指纹（活格子数和下标和），用来认出循环
+step = function()
+  local a, b = A, A2
+  local cnt, sum = 0, 0
+  for y = 0, GH - 1 do
+    local up, me, dn = YU[y], y * GW + 1, YD[y]
+    for x = 0, GW - 1 do col[x] = a[up + x] + a[me + x] + a[dn + x] end
+    for x = 0, GW - 1 do
+      local i = me + x
+      local v = a[i]
+      local n = col[XL[x]] + col[x] + col[XR[x]] - v
+      if (v == 1 and SURV[n]) or (v == 0 and BORN[n]) then
+        b[i] = 1
+        cnt = cnt + 1; sum = sum + i
+        local g = AGE[i]
+        if g < 99 then AGE[i] = g + 1 end
+      else
+        b[i] = 0
+        AGE[i] = 0
+      end
+    end
+  end
+  A, A2 = b, a
+  gen = gen + 1
+  return cnt .. ":" .. sum
+end
+recent_clear = function() seen, seen_n, gen = {}, 0, 0 end
+-- 这个指纹以前见过的话，返回周期
+recent_check = function(key)
+  local g = seen[key]
+  if g then return gen - g end
+  seen[key] = gen
+  seen_n = seen_n + 1
+  if seen_n > 400 then seen, seen_n = {}, 0 end
+  return nil
+end
+end
+
+-- 补算从 world.t 到现在。返回还要补几代（分几帧补，每帧补一点，画面看得到它快进）
+local function pending_gens()
+  local n = div(now() - world.t, BG_SECS)
+  if n <= 0 then return 0 end
+  if n > CATCHUP_MAX then
+    world.t = now() - CATCHUP_MAX * BG_SECS
+    n = CATCHUP_MAX
+  end
+  return n
+end
+
+-- ---------- 画面 ----------
+local function band(a)
+  if a == 0 then return 0 elseif a == 1 then return 1 elseif a <= 5 then return 2 end
+  return 3
+end
+local function paint()
+  for i = 1, N do
+    local bd = band(AGE[i])
+    if SHOWN[i] ~= bd then
+      SHOWN[i] = bd
+      fg(BAND[bd])
+      local k = i - 1
+      local y = div(k, GW)
+      rb.lcd_fillrect((k - y * GW) * CELL, y * CELL, CELL, CELL)
+    end
+  end
+end
+local function invalidate(x, y, w, h) -- 文字底下的格子下次重画
+  for cy = div(y, CELL), clamp(div(y + h, CELL), 0, GH - 1) do
+    for cx = div(x, CELL), clamp(div(x + w, CELL), 0, GW - 1) do SHOWN[cy * GW + cx + 1] = -1 end
+  end
+end
+local label_w, label_h = 0, 0
+local function draw_label(s, c)
+  local w, h = text_size(s)
+  if w < label_w then invalidate(2, 2, label_w, label_h); paint() end
+  label_w, label_h = w, h
+  text(2, 2, s, c, BG)
+end
+
+-- ---------- 存档 ----------
+local function load()
+  local s, found = load_kv(SAVE)
+  set_rule(clamp(num(s.rule, 1), 1, #RULES))
+  if found and s.cells then
+    decode(s.cells)
+    world.t = num(s.t, world.t)
+  else
+    for i = 1, N do A[i] = 0; AGE[i] = 0 end
+    seed(0, 0, GW, GH, 35)
+  end
+  for k = 1, MAX_FAV do
+    local v = s["fav" .. k]
+    if v then
+      local r, t, cells = string.match(v, "^(%d+),(%d+),(%d+)$")
+      if r then favs[#favs + 1] = { rule = clamp(num(r, 1), 1, #RULES), t = num(t, 0), cells = cells } end
+    end
+  end
+end
+local function save()
+  local out = { rule = world.rule, t = world.t, cells = encode() }
+  for k, f in ipairs(favs) do out["fav" .. k] = f.rule .. "," .. f.t .. "," .. f.cells end
+  save_kv(SAVE, out)
+end
+
+-- ---------- 主循环 ----------
+load()
+light_start()
+for i = 1, N do A2[i] = 0; SHOWN[i] = -1 end
+fg(BG); rect(0, 0, W, H)
+
+local live = { rule = world.rule, t = world.t, cells = encode() } -- 看收藏时，主宇宙先存在这里
+local viewing = 0      -- 0：主宇宙；k：正在看第 k 个收藏
+local catch = pending_gens()
+local settled = false  -- 补算时发现进入循环
+local next_gen = rb.current_tick()
+local turned_at = -TURN_HOLD
+local msg, msg_until = nil, 0
+local running = true
+local frame = 0
+
+-- 换到另一个宇宙：先把当前的写回去
+local function stash()
+  local rec = (viewing == 0) and live or favs[viewing]
+  rec.rule, rec.t, rec.cells = world.rule, world.t, encode()
+end
+local function enter(k)
+  viewing = k
+  local rec = (k == 0) and live or favs[k]
+  set_rule(rec.rule)
+  world.t = rec.t
+  decode(rec.cells)
+  recent_clear()
+  catch, settled = pending_gens(), false
+end
+local function say(s) msg, msg_until = s, rb.current_tick() + 2 * HZ end
+
+while running do
+  for _, e in ipairs(poll()) do
+    local g = select_gesture(e)
+    if e.k == "menu" and not e.rel then running = false
+    elseif (e.k == "fwd" or e.k == "back") and not e.rel and catch == 0 then
+      local d = (e.k == "fwd") and 1 or -1
+      if viewing == 0 then
+        set_rule(mod(world.rule - 1 + d, #RULES) + 1)
+        turned_at = rb.current_tick()
+      elseif #favs > 0 then
+        stash()
+        enter(mod(viewing - 1 + d, #favs) + 1)
+      end
+    elseif e.k == "play" and not e.rel and not e.rep then
+      stash()
+      if viewing == 0 then
+        if #favs > 0 then enter(#favs) else say("no fav") end
+      else
+        enter(0)
+      end
+    elseif g == "short" then
+      if viewing == 0 then
+        if #favs >= MAX_FAV then table.remove(favs, 1) end
+        favs[#favs + 1] = { rule = world.rule, t = now(), cells = encode() }
+        save()
+        say("fav " .. #favs)
+      else -- 把这个收藏搬回主宇宙
+        stash()
+        live.rule, live.t, live.cells = world.rule, world.t, encode()
+        enter(0)
+        say("back")
+      end
+    elseif g == "long" then
+      seed(div(GW, 2) - 4, div(GH, 2) - 4, 8, 8, 50)
+    end
+  end
+
+  local tk = rb.current_tick()
+  if catch > 0 then
+    -- 快进补算：每帧算 4 代再画；进入循环就直接跳到结果
+    for _ = 1, 4 do
+      if catch <= 0 then break end
+      local p = recent_check(step())
+      catch = catch - 1
+      world.t = world.t + BG_SECS
+      if p and p > 0 then
+        local skip = catch - mod(catch, p)
+        world.t = world.t + skip * BG_SECS
+        catch = catch - skip
+        settled = true
+      end
+    end
+    if catch == 0 then next_gen = tk end
+  else
+    local period = (tk - turned_at < TURN_HOLD) and TURN_PERIOD or LIVE_PERIOD
+    if tk >= next_gen then
+      step()
+      world.t = now()
+      next_gen = next_gen + period
+      if next_gen < tk then next_gen = tk + period end
+    end
+  end
+
+  paint()
+  if msg and tk < msg_until then
+    draw_label(msg, HI)
+  else
+    msg = nil
+    local s = (viewing == 0) and string.format("%02d", world.rule) or ("F" .. viewing .. " " .. string.format("%02d", world.rule))
+    if catch > 0 then s = s .. " +" .. catch elseif settled then s = s .. " loop" end
+    draw_label(s, INK)
+  end
+  rb.lcd_update()
+  keep_light()
+
+  frame = frame + 1
+  if mod(frame, 900) == 0 then stash(); save() end
+  rb.sleep(div(HZ, 20))
+end
+
+stash()
+if viewing ~= 0 then enter(0) end
+save()
+light_end()
