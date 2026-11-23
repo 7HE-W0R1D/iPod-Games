@@ -2,6 +2,7 @@
 -- 选子：转盘在能动的棋子之间跳，落点提示跟着显示；Select 选中
 -- 落子：转盘在合法落点之间跳；Select 落子；Menu 退回选子
 -- 上一首：悔一步   Play：思考时间 3 / 10 / 30 秒   Menu（选子时）：退出
+-- 下一首：电脑对电脑，你只看；再按一次，轮到白方时交还给你
 
 local SAVE = "slow_chess.txt"
 
@@ -496,7 +497,7 @@ local G = {
   mode = "pick", level = 1, hist = {}, legal = {}, pieces = {}, targets = {},
   cur = 1, tcur = 1, pcur = 1, sel = 0, last_f = 0, last_t = 0, think_f = 0, think_t = 0,
   games = 0, wins = 0, undos = 0, last_undos = 0, result = nil, note = nil, note_until = 0,
-  quit = false, shown = {}, strip_key = "",
+  quit = false, shown = {}, strip_key = "", watch = false, over_at = 0, reps = {}, half = 0,
 }
 local PROMOS = { 5, 4, 3, 2 }
 
@@ -504,7 +505,8 @@ local function save()
   local h = {}
   for i, m in ipairs(G.hist) do h[i] = m.f .. "," .. m.t .. "," .. m.p end
   save_kv(SAVE, { moves = table.concat(h, ";"), level = G.level, games = G.games, wins = G.wins,
-                  undos = G.undos, last_undos = G.last_undos, result = G.result or "" })
+                  undos = G.undos, last_undos = G.last_undos, result = G.result or "",
+                  watch = G.watch and 1 or 0 })
 end
 
 -- 轮到玩家：算出能动的棋子和各自的落点
@@ -536,16 +538,40 @@ local function targets_of(f)
   return list
 end
 
+-- 和棋规则要用：同一局面出现几次；多少步没动兵也没吃子
+local function position_key()
+  local t = {}
+  for r = 2, 9 do for f = 1, 8 do t[#t + 1] = string.char(E.B[r * 10 + f] + 70) end end
+  t[#t + 1] = E.side()
+  return table.concat(t)
+end
+local function note_position(reset)
+  if reset then G.half = 0 else G.half = G.half + 1 end
+  local k = position_key()
+  G.reps[k] = (G.reps[k] or 0) + 1
+end
+-- 所有真正走的棋都从这里走
+local function play_move(m)
+  local p, cap = E.B[m.f], E.B[m.t]
+  if not E.play(m.f, m.t, m.p) then return false end
+  note_position(p == 1 or p == -1 or cap ~= 0)
+  return true
+end
+
 local function finish_game(result)
   G.result = result
   G.mode = "over"
-  G.games = G.games + 1
-  if result == "1-0" then G.wins = G.wins + 1 end
-  G.last_undos = G.undos
+  G.over_at = rb.current_tick()
+  if not G.watch then -- 电脑对电脑的局不算进你的记录
+    G.games = G.games + 1
+    if result == "1-0" then G.wins = G.wins + 1 end
+    G.last_undos = G.undos
+  end
   save()
 end
 local function check_over()
   local s = E.status()
+  if not s and (G.half >= 100 or (G.reps[position_key()] or 0) >= 3) then s = "draw" end -- 50 步、三次重复
   if not s then return false end
   if s == "mate" then finish_game((E.side() == 1) and "0-1" or "1-0") else finish_game("1/2") end
   return true
@@ -553,19 +579,23 @@ end
 
 local function new_game()
   E.new_game()
+  G.reps, G.half = {}, 0
+  note_position(true)
   G.hist, G.result, G.undos = {}, nil, 0
   G.last_f, G.last_t, G.cur = 0, 0, 1
-  G.mode = "pick"
-  if G.last_undos > 0 then G.note, G.note_until = "undo " .. G.last_undos, rb.current_tick() + 6 * HZ end
+  G.mode = G.watch and "think" or "pick"
+  if G.last_undos > 0 and not G.watch then G.note, G.note_until = "undo " .. G.last_undos, rb.current_tick() + 6 * HZ end
   refresh_turn()
 end
 
 -- 从走法记录重新摆出局面（读档、悔棋都用它）
 local function replay(hist)
   E.new_game()
+  G.reps, G.half = {}, 0
+  note_position(true)
   local ok = {}
   for _, m in ipairs(hist) do
-    if not E.play(m.f, m.t, m.p) then break end
+    if not play_move(m) then break end
     ok[#ok + 1] = m
   end
   G.hist = ok
@@ -578,6 +608,7 @@ local function load()
   G.level = clamp(num(s.level, 1), 1, #LEVELS)
   G.games, G.wins = num(s.games, 0), num(s.wins, 0)
   G.last_undos = num(s.last_undos, 0)
+  G.watch = s.watch == "1"
   new_game()
   G.note = nil
   if not found then return end
@@ -587,8 +618,8 @@ local function load()
   end
   replay(hist)
   G.undos = num(s.undos, 0)
-  if s.result and s.result ~= "" then G.result, G.mode = s.result, "over"
-  elseif E.side() == -1 then G.mode = "think"
+  if s.result and s.result ~= "" then G.result, G.mode, G.over_at = s.result, "over", rb.current_tick()
+  elseif E.side() == -1 or G.watch then G.mode = "think"
   else refresh_turn() end
 end
 
@@ -638,7 +669,7 @@ local function draw_strip()
   end end
   local START = { 8, 2, 2, 2, 1, 1 }
   local lost = { [1] = {}, [-1] = {} }
-  local key = G.mode .. (G.result or "") .. G.level .. (G.note or "")
+  local key = G.mode .. (G.result or "") .. G.level .. (G.note or "") .. (G.watch and "w" or "")
   for _, s in ipairs({ 1, -1 }) do
     for _, t in ipairs({ 5, 4, 3, 2, 1 }) do
       local n = START[t] - count[s][t]
@@ -665,7 +696,7 @@ local function draw_strip()
   elseif G.note then
     text(SX + 4, H - 28, G.note, C.ink, C.strip)
   end
-  text(SX + 4, H - 14, LEVELS[G.level] .. "s", C.dim, C.strip)
+  text(SX + 4, H - 14, (G.watch and "auto " or "") .. LEVELS[G.level] .. "s", G.watch and C.ink or C.dim, C.strip)
 end
 
 local function render()
@@ -704,7 +735,8 @@ local function think_hook(f, t)
   G.think_f, G.think_t = f, t
   render()
   for _, e in ipairs(poll()) do
-    if e.k == "menu" and not e.rel then G.quit = true end
+    if e.k == "menu" and not e.rel then G.quit = true
+    elseif e.k == "next" and not e.rel and not e.rep then G.watch = not G.watch end
   end
   if G.quit then return end
   keep_light()
@@ -723,11 +755,13 @@ local function engine_move()
   G.think_f, G.think_t = 0, 0
   if not f then return end
   G.last_eval = sc
-  E.play(f, t, p)
-  G.hist[#G.hist + 1] = { f = f, t = t, p = p }
+  local m = { f = f, t = t, p = p }
+  play_move(m)
+  G.hist[#G.hist + 1] = m
   G.last_f, G.last_t = f, t
   if not check_over() then
-    G.mode = "pick"
+    -- 电脑对电脑：接着替另一方想；否则轮到白方时交给你
+    if G.watch or E.side() == -1 then G.mode = "think" else G.mode = "pick" end
     refresh_turn()
   end
 end
@@ -753,6 +787,9 @@ while not G.quit do
         elseif G.mode == "promo" then G.pcur = mod(G.pcur - 1 + d, #PROMOS) + 1 end
       elseif k == "play" and not e.rep then
         G.level = mod(G.level, #LEVELS) + 1
+      elseif k == "next" and not e.rep then
+        G.watch = not G.watch
+        if G.watch and (G.mode == "pick" or G.mode == "target" or G.mode == "promo") then G.mode = "think" end
       elseif k == "prev" and not e.rep and (G.mode == "pick" or G.mode == "target") then
         -- 悔棋：退回到上一次轮到你的时候
         local h = G.hist
@@ -791,7 +828,7 @@ while not G.quit do
   if G.pending then
     local m = G.pending
     G.pending = nil
-    if E.play(m.f, m.t, m.p) then
+    if play_move(m) then
       G.hist[#G.hist + 1] = m
       G.last_f, G.last_t = m.f, m.t
       if not check_over() then G.mode = "think" end
@@ -800,6 +837,8 @@ while not G.quit do
   end
 
   if G.note and rb.current_tick() > G.note_until then G.note = nil end
+  -- 电脑对电脑：一局结束停 10 秒，再开下一局
+  if G.watch and G.mode == "over" and rb.current_tick() > G.over_at + 10 * HZ then new_game() end
   render()
 
   if G.mode == "think" then
