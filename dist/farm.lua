@@ -765,13 +765,47 @@ end
 end
 
 -- ---------- 画面 ----------
+-- 伪 3D：一块有厚度的草地板子，棋盘格草坪上放着凸起的苗床（顶面、侧面、深色描边、地上一道影子）。
+-- 作物都由小方块拼成，统一描一圈深色边：先把所有方块的描边画完，再画填色，相邻方块的边就连成一个轮廓。
 local draw_all, draw_bag
 do
-local BAR = 112 -- 底栏
-local L, land = nil, { 256, 256, 256 }
-local shown = {}
+local D = { BAR = 114, TOP = 11, shown = {}, land = { 256, 256, 256 }, sh = {}, pen = { 0, 0, 0 } }
+local K = { -- 颜色（画的时候都按当前的光 tint 一下）
+  BG = { 190, 232, 124 }, BG2 = { 168, 216, 106 }, OUT = { 58, 40, 54 },
+  LAWN1 = { 124, 208, 98 }, LAWN2 = { 96, 182, 88 }, TUFT = { 176, 236, 126 }, SHADE = { 76, 146, 78 },
+  SIDE = { 86, 156, 80 }, UNDER = { 156, 82, 96 },
+  WOOD = { 232, 174, 104 }, WOODS = { 198, 128, 74 }, WOODD = { 160, 96, 60 },
+  SOIL = { 128, 80, 58 }, SOILW = { 94, 58, 48 }, SOILD = { 104, 64, 50 },
+  LEAF = { 112, 210, 92 }, LEAF2 = { 60, 164, 82 }, LEAF3 = { 176, 238, 124 }, STEM = { 138, 104, 70 },
+  BLOOM = { 255, 248, 228 }, YEL = { 255, 218, 72 }, PINK = { 255, 196, 214 },
+  WEED = { 64, 142, 76 }, WEED2 = { 104, 188, 90 },
+  CRIT = { -- 小动物的小像素图（朝右）
+    rabbit = { c = { 215, 205, 190 }, "......#.", ".....##.", "..#####.", ".######.", "######..", ".#...#.." },
+    frog = { c = { 190, 235, 90 }, "#....#", ".####.", "######", "#....#" },
+    hedgehog = { c = { 235, 205, 165 }, ".#####..", "#######.", "########", ".#...#.." },
+    butterfly = { c = { 245, 190, 220 }, "#...#", "##.##", ".#.#." },
+  },
+}
+local function lit(c) return pack(tint(c, D.land)) end
+
+-- 描边方块：P 选颜色，R 记一块，flush 一起画（先描边、后填色）；RH 是不描边的高光
+D.P = function(c) D.pen = c end
+D.R = function(x, y, w, h) if w > 0 and h > 0 then D.sh[#D.sh + 1] = { x, y, w, h, D.pen } end end
+D.RH = function(x, y, w, h) D.sh[#D.sh + 1] = { x, y, w, h, D.pen, true } end
+D.flush = function()
+  local sh = D.sh
+  fg(lit(K.OUT))
+  for _, s in ipairs(sh) do if not s[6] then rect(s[1] - 1, s[2] - 1, s[3] + 2, s[4] + 2) end end
+  local last
+  for _, s in ipairs(sh) do
+    if s[5] ~= last then last = s[5]; fg(lit(last)) end
+    rect(s[1], s[2], s[3], s[4])
+  end
+  D.sh = {}
+end
+
 -- 还要多久
-local function eta(p)
+D.eta = function(p)
   if p.w <= 0 then return "dry" end
   if p.wd then return "weedy" end
   local left = CROPS[p.c].grow - p.g
@@ -780,7 +814,7 @@ local function eta(p)
   if left < 2880 then return "ripe in " .. div(left + 59, 60) .. "h" end
   return "ripe in " .. div(left + 1439, 1440) .. "d"
 end
-local function new_vars()
+D.new_vars = function()
   local n = 0
   for key in pairs(VAR) do
     local c = tonumber(string.match(key, "^(%d+)"))
@@ -788,146 +822,180 @@ local function new_vars()
   end
   return n
 end
-local function lit(c) return pack(tint(c, land)) end
-
-local K = { -- 田里的颜色
-  GRASS = { 92, 130, 64 }, GRASS2 = { 70, 108, 52 }, WEED = { 64, 96, 46 }, WEED2 = { 110, 140, 60 },
-  DIRT = { 130, 92, 60 }, DIRTW = { 88, 62, 44 }, FURROW = { 100, 70, 46 },
-  LEAF = { 80, 160, 70 }, LEAF2 = { 60, 130, 55 }, STEM = { 110, 90, 60 }, FENCE = { 150, 120, 85 },
-}
-
-local function soil(x, y, p)
-  local wet = p.w > 40
-  fg(lit(wet and K.DIRTW or K.DIRT)); rect(x, y, PS, PS)
-  fg(lit(wet and { 70, 50, 36 } or K.FURROW))
-  for k = 0, 3 do rect(x + 2, y + 5 + k * 8, PS - 4, 1) end
+D.seen = function(c)
+  if BARN[c] > 0 then return true end
+  for key in pairs(VAR) do if string.match(key, "^(%d+):") == tostring(c) then return true end end
+  return false
 end
 
-local function grass(x, y, i, weedy)
-  fg(lit(weedy and K.WEED or K.GRASS)); rect(x, y, PS, PS)
+-- ---------- 地面 ----------
+D.lawn = function(x, y, i)
+  local odd = mod(mod(i - 1, COLS) + div(i - 1, COLS), 2) == 1
+  fg(lit(odd and K.LAWN2 or K.LAWN1)); rect(x, y, PS, PS)
+end
+D.tufts = function(x, y, i, n)
   local r = Rng(i * 7 + 3)
-  fg(lit(weedy and K.WEED2 or K.GRASS2))
-  for _ = 1, weedy and 14 or 8 do
-    local tx, ty = r(PS - 3), r(PS - 6) + 2
-    rect(x + tx, y + ty, 1, weedy and 5 or 3); if weedy then rect(x + tx + 1, y + ty + 1, 1, 3) end
+  fg(lit(K.TUFT))
+  for _ = 1, n do
+    local tx, ty = x + 3 + r(PS - 8), y + 3 + r(PS - 8)
+    rect(tx, ty + 1, 1, 2); rect(tx + 2, ty, 1, 3); rect(tx + 4, ty + 1, 1, 2)
   end
 end
+-- 长满杂草：几丛描边的灌木
+D.weeds = function(x, y, i)
+  local r = Rng(i * 13 + 5)
+  local P, R = D.P, D.R
+  for _ = 1, 4 do
+    local bx, by = x + 3 + r(PS - 14), y + 4 + r(PS - 14)
+    P(K.WEED); R(bx, by + 2, 10, 6); R(bx + 2, by, 6, 9)
+    P(K.WEED2); D.RH(bx + 2, by + 1, 2, 2); D.RH(bx + 6, by + 3, 2, 1)
+  end
+  D.flush()
+end
+-- 木头种植箱：浅色的箱沿、里面一层土、正面是带接缝的木板，地上一道影子
+D.bed = function(x, y, p, i)
+  local wet = p.w > 40
+  fg(lit(K.SHADE)); rect(x + 4, y + 30, 26, 2)
+  fg(lit(K.OUT)); rect(x + 3, y + 9, 26, 22); rect(x + 2, y + 10, 28, 20)
+  fg(lit(K.WOOD)); rect(x + 3, y + 10, 26, 13)
+  fg(lit(wet and K.SOILW or K.SOIL)); rect(x + 5, y + 12, 22, 9)
+  fg(lit(K.SOILD)); rect(x + 5, y + 12, 22, 1)
+  local r = Rng(i * 5 + 1)
+  for _ = 1, 4 do rect(x + 6 + r(19), y + 14 + r(6), 2, 1) end
+  fg(lit(K.WOODS)); rect(x + 3, y + 23, 26, 7)
+  fg(lit(K.WOODD)); rect(x + 3, y + 23, 26, 1)
+  for k = 1, 3 do rect(x + 3 + k * 7, y + 24, 1, 6) end -- 木板接缝
+  fg(lit({ 250, 206, 140 })); rect(x + 4, y + 10, 24, 1)  -- 箱沿的高光
+end
 
--- 后来加的五种：胡萝卜、番茄、玉米、向日葵、草莓
-local function plant_more(x, y, c, st, col, leaf, leaf2, fruit)
-  local bloom = lit({ 250, 240, 200 })
-  if c == 5 or c == 9 then -- 胡萝卜 / 草莓：每块 4 棵，矮
-    for k = 0, 3 do
-      local px, py = x + 6 + mod(k, 2) * 14, y + 6 + div(k, 2) * 14
-      local s = ({ 2, 4, 6, 7 })[st]
-      if c == 5 then -- 羽毛一样的细叶
-        fg(leaf); rect(px + 1, py + 7 - s, 1, s); rect(px + 3, py + 6 - s, 1, s + 1); rect(px + 5, py + 7 - s, 1, s)
-        if st == 3 then fg(bloom); rect(px + 2, py + 5 - s, 3, 1) end
-        if st == 4 then fg(fruit); rect(px + 1, py + 7, 5, 2); rect(px + 2, py + 9, 3, 2); rect(px + 3, py + 11, 1, 1) end
-      else -- 贴地的一丛
-        fg(leaf2); rect(px + 3 - div(s, 2), py + 9 - div(s, 2), s, div(s, 2) + 1)
-        fg(leaf); rect(px + 4 - div(s, 2), py + 8 - div(s, 2), s - 2, 2)
-        if st == 3 then fg(bloom); rect(px + 1, py + 7, 1, 1); rect(px + 5, py + 8, 1, 1) end
-        if st == 4 then fg(fruit); rect(px, py + 9, 2, 2); rect(px + 5, py + 8, 2, 2); rect(px + 3, py + 10, 2, 2) end
-      end
-    end
-  elseif c == 6 then -- 番茄：两丛，绑在竹竿上
-    for k = 0, 1 do
-      local px = x + 8 + k * 14
-      local h = ({ 5, 12, 18, 20 })[st]
-      fg(lit(K.STEM)); rect(px, y + PS - 3 - h, 1, h)
-      fg(leaf2); rect(px - 4, y + PS - 3 - h + 3, 9, h - 4)
-      fg(leaf); rect(px - 3, y + PS - 3 - h + 2, 7, div(h, 2))
-      if st == 3 then fg(lit({ 250, 220, 60 })); rect(px - 2, y + PS - h + 2, 1, 1); rect(px + 2, y + PS - h + 6, 1, 1) end
-      if st == 4 then
-        fg(fruit)
-        for f = 0, 3 do rect(px - 3 + mod(f, 2) * 5, y + PS - h + 2 + div(f, 2) * 6, 3, 3) end
-      end
-    end
-  elseif c == 7 then -- 玉米：三根高秆
+-- ---------- 作物 ----------
+-- 地面线 g：苗床顶面中间。所有作物都画在自己这一格（32×32）里面，不越界。
+D.low = function(x, y, g, c, st, col) -- 萝卜、胡萝卜、草莓
+  local P, R, RH = D.P, D.R, D.RH
+  if c == 1 then -- 萝卜：三个圆圆的红头半埋在土里，顶上一对叶子
     for k = 0, 2 do
-      local px = x + 6 + k * 10
-      local h = ({ 6, 14, 22, 26 })[st]
-      fg(leaf); rect(px, y + PS - 2 - h, 2, h)
-      fg(leaf2); rect(px - 3, y + PS - 2 - div(h, 2), 3, 1); rect(px + 2, y + PS - 2 - div(h * 3, 4), 3, 1)
-      if st >= 3 then fg(lit({ 215, 195, 140 })); rect(px - 1, y + PS - 4 - h, 4, 2) end -- 穗
-      if st == 4 then fg(fruit); rect(px + 2, y + PS - 2 - div(h, 2) - 3, 2, 6) end
+      local cx, by = x + 9 + k * 7, g + 2
+      local s = ({ 2, 3, 4, 4 })[st]
+      if st == 4 then P(col); R(cx - 2, by - 2, 5, 3) end
+      P(K.LEAF); R(cx - s, by - s - 2, s, s); R(cx + 1, by - s - 2, s, s)
+      P(K.LEAF2); R(cx, by - 3, 1, 2)
+      if st == 3 then P(K.BLOOM); R(cx, by - s - 5, 1, 2) end
+      if st == 4 then P(K.BLOOM); RH(cx - 1, by - 2, 1, 1) end
     end
-  else -- 向日葵：两棵，越长越高
+  elseif c == 5 then -- 胡萝卜：一整丛羽毛一样的叶子，熟了露出三个橙色的头
+    local s = ({ 3, 5, 7, 8 })[st]
+    if st == 4 then P(col); R(x + 8, g + 1, 3, 2); R(x + 15, g + 2, 3, 2); R(x + 22, g + 1, 3, 2) end
+    P(K.LEAF2); R(x + 6, g - s + 2, 20, s - 1)
+    P(K.LEAF); R(x + 8, g - s, 16, s - 2)
+    P(K.LEAF3); for k = 0, 4 do RH(x + 9 + k * 3, g - s + 1 + mod(k, 2), 1, 1) end
+    if st == 3 then P(K.BLOOM); R(x + 10, g - s - 1, 3, 1); R(x + 19, g - s - 1, 3, 1) end
+  else -- 草莓：贴地的一片三出叶，熟了的果子垂在箱子前沿上
+    local s = ({ 1, 2, 3, 3 })[st]
+    P(K.LEAF2); R(x + 6, g - 1, 20, 3)
+    P(K.LEAF)
+    for k = 0, 2 do
+      local cx = x + 9 + k * 7
+      R(cx - s, g - 2 - s, s, s); R(cx + 1, g - 2 - s, s, s); R(cx - 1, g - 3 - s, 2, s)
+    end
+    if st == 3 then P(K.BLOOM); R(x + 11, g - 1, 2, 2); R(x + 19, g - 2, 2, 2) end
+    if st == 4 then
+      P(col); R(x + 8, y + 22, 3, 4); R(x + 16, y + 23, 3, 4); R(x + 23, y + 22, 3, 3)
+      P(K.LEAF2); RH(x + 8, y + 22, 3, 1); RH(x + 16, y + 23, 3, 1); RH(x + 23, y + 22, 3, 1)
+      P(K.YEL); RH(x + 9, y + 24, 1, 1); RH(x + 17, y + 25, 1, 1)
+    end
+  end
+end
+
+D.tall = function(x, y, g, c, st, col) -- 麦子、番茄、玉米、向日葵、南瓜、苹果树
+  local P, R, RH = D.P, D.R, D.RH
+  if c == 2 then -- 麦子：一整片麦浪，顶上一排麦穗
+    local h = ({ 3, 6, 9, 10 })[st]
+    P(st == 4 and mix(col, K.STEM, 1, 4) or K.LEAF); R(x + 5, g - h + 2, 22, h)
+    P(st == 4 and mix(col, K.STEM, 1, 2) or K.LEAF2); for k = 0, 6 do RH(x + 6 + k * 3, g - h + 4, 1, h - 3) end
+    if st >= 3 then
+      P(st == 4 and mix(col, { 255, 255, 255 }, 1, 4) or { 206, 222, 150 })
+      for k = 0, 6 do R(x + 5 + k * 3, g - h - 1 - mod(k, 2), 2, 3) end
+    end
+  elseif c == 6 then -- 番茄：一丛圆圆的，套着铁丝笼
+    local h = ({ 4, 8, 11, 12 })[st]
+    local cx = x + 16
+    P(K.LEAF2); R(cx - 6, g - h + 2, 13, h - 1)
+    P(K.LEAF); R(cx - 5, g - h, 11, h - 3)
+    P(K.LEAF3); RH(cx - 3, g - h + 1, 2, 1)
+    if st == 3 then P(K.YEL); R(cx - 3, g - h + 4, 1, 1); R(cx + 3, g - h + 6, 1, 1) end
+    if st == 4 then
+      P(col); R(cx - 5, g - h + 3, 3, 3); R(cx + 2, g - h + 2, 3, 3); R(cx - 1, g - h + 6, 3, 3); R(cx + 3, g - h + 7, 3, 3)
+      P(K.BLOOM); RH(cx - 4, g - h + 3, 1, 1); RH(cx + 3, g - h + 2, 1, 1)
+    end
+    P({ 214, 220, 230 }); RH(cx - 8, g - h + 2, 1, h); RH(cx + 8, g - h + 2, 1, h)
+    RH(cx - 8, g - h + 2, 17, 1); RH(cx - 8, g - 1, 17, 1)
+  elseif c == 7 then -- 玉米：两棵，长叶子往下垂
+    local h = ({ 5, 10, 14, 15 })[st]
     for k = 0, 1 do
-      local px = x + 9 + k * 14
-      local h = ({ 6, 14, 20, 22 })[st]
-      fg(leaf); rect(px, y + PS - 2 - h, 2, h)
-      fg(leaf2); rect(px - 3, y + PS - 2 - div(h, 2), 3, 2); rect(px + 2, y + PS - div(h, 3), 3, 2)
-      if st == 3 then fg(leaf2); rect(px - 1, y + PS - 5 - h, 4, 4); fg(lit({ 250, 220, 60 })); rect(px, y + PS - 6 - h, 2, 1) end
+      local sx = x + 11 + k * 10
+      P(K.LEAF); R(sx, g - h, 2, h)
+      P(K.LEAF2); R(sx - 4, g - div(h, 2), 4, 1); R(sx - 5, g - div(h, 2) + 1, 1, 2)
+      R(sx + 2, g - div(h * 3, 4), 4, 1); R(sx + 6, g - div(h * 3, 4) + 1, 1, 2)
+      if st >= 3 then P({ 232, 212, 150 }); R(sx - 1, g - h - 2, 1, 2); R(sx + 1, g - h - 3, 1, 3); R(sx + 2, g - h - 2, 1, 2) end
+      if st == 4 then P(col); R(sx + 2, g - div(h, 2) - 4, 3, 6); P(K.LEAF2); RH(sx + 2, g - div(h, 2) + 1, 3, 1) end
+    end
+  elseif c == 8 then -- 向日葵：每箱一棵大的
+    local h = ({ 3, 5, 7, 7 })[st]
+    local cx = x + 15
+    P(K.LEAF); R(cx, g - h, 2, h + 1)
+    P(K.LEAF2); R(cx - 6, g - div(h, 2) - 1, 6, 3); R(cx + 2, g - h + 1, 6, 3)
+    if st == 3 then P(K.LEAF2); R(cx - 2, g - h - 4, 6, 4); P(K.YEL); R(cx - 1, g - h - 5, 4, 1) end
+    if st == 4 then
+      P(col); R(cx - 5, g - h - 9, 12, 9); R(cx - 4, g - h - 10, 10, 11)
+      P(mix(col, { 255, 255, 255 }, 1, 3)); RH(cx - 4, g - h - 9, 2, 1); RH(cx + 5, g - h - 4, 1, 2)
+      P({ 110, 70, 40 }); R(cx - 2, g - h - 7, 6, 5)
+      P({ 150, 100, 56 }); RH(cx - 1, g - h - 6, 1, 1); RH(cx + 2, g - h - 5, 1, 1); RH(cx, g - h - 4, 1, 1)
+    end
+  elseif c == 3 then -- 南瓜：藤蔓爬出箱沿，熟了一个大南瓜
+    local lw = ({ 3, 4, 5, 5 })[st]
+    P(K.LEAF2); R(x + 5, g, 22, 2); R(x + 26, g + 2, 2, 5)
+    P(K.LEAF); R(x + 7, g - lw, lw + 1, lw); R(x + 21, g - lw - 1, lw + 1, lw)
+    if st >= 2 then R(x + 14, g - lw + 1, lw, lw - 1) end
+    if st == 3 then P(K.YEL); R(x + 11, g - 3, 2, 2); R(x + 19, g - 2, 2, 2) end
+    if st == 4 then
+      P(K.STEM); R(x + 15, g - 9, 2, 2)
+      P(col); R(x + 10, g - 6, 12, 8); R(x + 12, g - 7, 8, 10)
+      P(mix(col, { 0, 0, 0 }, 1, 4)); RH(x + 13, g - 5, 1, 6); RH(x + 18, g - 5, 1, 6)
+      P(mix(col, { 255, 255, 255 }, 1, 2)); RH(x + 11, g - 5, 1, 2)
+    end
+  else -- 苹果树：圆圆的树冠
+    local h = ({ 3, 4, 4, 4 })[st]
+    P(K.STEM); R(x + 15, g - h, 2, h + 1)
+    if st == 1 then P(K.LEAF); R(x + 13, g - h - 3, 6, 3)
+    else
+      local big = st >= 3
+      local cw, ch = big and 18 or 10, big and 12 or 7
+      P(K.LEAF2); R(x + 16 - div(cw, 2), g - h - ch + 1, cw, ch - 1)
+      P(K.LEAF); R(x + 16 - div(cw, 2) + 2, g - h - ch, cw - 4, ch - 3)
+      P(K.LEAF3); RH(x + 16 - div(cw, 2) + 3, g - h - ch + 1, 3, 1)
+      if st == 3 then P(K.PINK); for k = 0, 4 do R(x + 9 + k * 3, g - h - ch + 2 + mod(k, 2) * 4, 1, 1) end end
       if st == 4 then
-        fg(fruit); rect(px - 3, y + PS - 7 - h, 8, 6); rect(px - 2, y + PS - 8 - h, 6, 8)
-        fg(lit({ 100, 65, 35 })); rect(px - 1, y + PS - 6 - h, 4, 4)
+        P(col); for k = 0, 4 do R(x + 9 + k * 3, g - h - ch + 3 + mod(k * 5, 6), 3, 3) end
+        P(K.BLOOM); for k = 0, 4 do RH(x + 9 + k * 3, g - h - ch + 3 + mod(k * 5, 6), 1, 1) end
       end
     end
   end
 end
 
--- 各种作物各个阶段的画法
-local function plant_at(x, y, p)
-  local st, c, col = stage(p), p.c, p.col
-  local leaf, leaf2, fruit = lit(K.LEAF), lit(K.LEAF2), lit(col)
-  if st == 0 then
-    fg(lit({ 60, 44, 30 }))
-    for k = 0, 3 do rect(x + 7 + mod(k, 2) * 16, y + 9 + div(k, 2) * 14, 2, 2) end
+D.crop = function(x, y, p)
+  local st, c = stage(p), p.c
+  local g = y + 17
+  if st == 0 then -- 刚种下：土里几个小坑
+    fg(lit({ 70, 44, 34 }))
+    for k = 0, 2 do rect(x + 8 + k * 7, g + mod(k, 2), 2, 2) end
     return
   end
-  if c >= 5 then plant_more(x, y, c, st, col, leaf, leaf2, fruit); return end
-  if c == 4 then -- 果树：一棵
-    local h = ({ 8, 16, 22, 24 })[st]
-    fg(lit(K.STEM)); rect(x + 15, y + PS - h, 2, h)
-    if st >= 2 then
-      local cw = st == 2 and 14 or 22
-      fg(leaf2); rect(x + 16 - div(cw, 2), y + PS - h - 2, cw, div(cw * 2, 3))
-      fg(leaf); rect(x + 16 - div(cw, 2) + 2, y + PS - h - 4, cw - 4, div(cw, 2))
-      if st == 3 then fg(lit({ 250, 235, 240 })); for k = 0, 4 do rect(x + 8 + k * 4, y + PS - h - 2 + mod(k, 2) * 4, 1, 1) end end
-      if st == 4 then fg(fruit); for k = 0, 5 do rect(x + 7 + k * 3, y + PS - h + mod(k * 5, 7), 2, 2) end end
-    else fg(leaf); rect(x + 12, y + PS - h - 2, 8, 3) end
-    return
-  end
-  if c == 3 then -- 南瓜：一大棵，藤叶铺开
-    fg(leaf2); rect(x + 4, y + 18, 24, 2)
-    local lw = ({ 6, 12, 18, 20 })[st]
-    fg(leaf); rect(x + 16 - div(lw, 2), y + 12, lw, div(lw, 2) + 2)
-    if st == 3 then fg(lit({ 250, 210, 60 })); rect(x + 10, y + 12, 2, 2); rect(x + 20, y + 14, 2, 2) end
-    if st == 4 then
-      fg(fruit); rect(x + 9, y + 18, 14, 9); rect(x + 11, y + 17, 10, 11)
-      fg(lit(mix(col, { 0, 0, 0 }, 1, 3))); rect(x + 13, y + 18, 1, 9); rect(x + 18, y + 18, 1, 9)
-      fg(lit(K.STEM)); rect(x + 15, y + 15, 2, 3)
-    end
-    return
-  end
-  -- 萝卜和麦子：每块 4 棵 / 5 行
-  if c == 1 then
-    for k = 0, 3 do
-      local px, py = x + 6 + mod(k, 2) * 14, y + 6 + div(k, 2) * 14
-      local s = ({ 2, 4, 6, 6 })[st]
-      fg(leaf); rect(px + 3 - div(s, 2), py + 6 - s, s, s); fg(leaf2); rect(px + 3, py + 6 - s, 1, s)
-      if st == 3 then fg(lit({ 245, 240, 250 })); rect(px + 2, py + 6 - s - 1, 2, 1) end
-      if st == 4 then fg(fruit); rect(px + 1, py + 6, 5, 4); rect(px + 2, py + 10, 3, 2) end
-    end
-    return
-  end
-  for k = 0, 4 do -- 麦子
-    local px = x + 4 + k * 6
-    local h = ({ 4, 10, 18, 22 })[st]
-    fg(st == 4 and lit(mix(col, K.STEM, 1, 2)) or leaf); rect(px, y + PS - 3 - h, 1, h); rect(px + 2, y + PS - 3 - h + 3, 1, h - 3)
-    if st >= 3 then fg(st == 4 and fruit or lit({ 200, 210, 150 })); rect(px - 1, y + PS - 3 - h - 4, 3, 5) end
-  end
+  if c == 1 or c == 5 or c == 9 then D.low(x, y, g, c, st, p.col) else D.tall(x, y, g, c, st, p.col) end
+  D.flush()
 end
 
-K.CRIT = { -- 小动物的小像素图（朝右）
-  rabbit = { c = { 205, 195, 180 }, "......#.", ".....##.", "..#####.", ".######.", "######..", ".#...#.." },
-  frog = { c = { 190, 235, 90 }, "#....#", ".####.", "######", "#....#" },
-  hedgehog = { c = { 235, 205, 165 }, ".#####..", "#######.", "########", ".#...#.." },
-  butterfly = { c = { 245, 190, 220 }, "#...#", "##.##", ".#.#." },
-}
-local function critter_on(i) -- 这块地上有没有小动物（看四个角）
+-- ---------- 一块地 ----------
+D.critter_on = function(i) -- 这块地上有没有小动物（看四个角）
   local a = critter
   if not a then return false end
   for k = 0, 3 do
@@ -935,91 +1003,124 @@ local function critter_on(i) -- 这块地上有没有小动物（看四个角）
   end
   return false
 end
-local function plot_sig(i, bees)
+
+D.sig = function(i, bees, rain)
   local p = P[i]
   local s = p.k * 10 + (p.k == CROP and (p.c * 100 + stage(p) * 1000) or 0) + (p.wd and 1 or 0)
   s = s + (p.w > 40 and 7000 or 0) + (i == S.cur and 50000 or 0) + (crow and crow.i == i and 100000 or 0)
-  if critter_on(i) then s = s .. ":" .. critter.x .. "," .. critter.y .. "," .. critter.hop end
-  return s .. ":" .. (bees or 0)
+  if D.critter_on(i) then s = s .. ":" .. critter.x .. "," .. critter.y .. "," .. critter.hop end
+  return s .. ":" .. (bees or 0) .. ":" .. (rain or 0)
 end
 
-local function draw_plot(i, bees)
+D.plot = function(i, bees, rain)
   local p = P[i]
   local x, y = FX + mod(i - 1, COLS) * PS, FY + div(i - 1, COLS) * PS
-  if p.k == WILD or p.k == WEEDS then grass(x, y, i, p.k == WEEDS)
+  D.lawn(x, y, i)
+  if p.k == WILD then D.tufts(x, y, i, 3)
+  elseif p.k == WEEDS then D.weeds(x, y, i)
   else
-    soil(x, y, p)
+    D.bed(x, y, p, i)
     if p.k == CROP then
-      plant_at(x, y, p)
-      if p.wd then
+      D.crop(x, y, p)
+      if p.wd then -- 苗床里也长了草
         local r = Rng(i * 11)
-        fg(lit(K.WEED2)); for _ = 1, 6 do rect(x + r(PS - 2), y + r(PS - 6) + 2, 1, 4) end
+        local Pn, R = D.P, D.R
+        Pn(K.WEED)
+        for _ = 1, 3 do local wx = x + 5 + r(20); R(wx, y + 15 + r(6), 3, 3); R(wx + 1, y + 13 + r(2), 1, 3) end
+        D.flush()
       end
     end
   end
-  -- 篱笆一样的地界
-  fg(lit(K.FENCE)); rect(x, y, PS, 1); rect(x, y, 1, PS)
-  if i == S.cur then
-    fg(rgb(250, 245, 220)); rect(x + 1, y + 1, PS - 2, 1); rect(x + 1, y + PS - 2, PS - 2, 1)
-    rect(x + 1, y + 1, 1, PS - 2); rect(x + PS - 2, y + 1, 1, PS - 2)
+  if i == S.cur then -- 光标：四个角的白色描边方括号
+    local Pn, R = D.P, D.R
+    Pn({ 252, 250, 240 })
+    R(x + 1, y + 1, 6, 2); R(x + 1, y + 1, 2, 6); R(x + PS - 7, y + 1, 6, 2); R(x + PS - 3, y + 1, 2, 6)
+    R(x + 1, y + PS - 3, 6, 2); R(x + 1, y + PS - 7, 2, 6); R(x + PS - 7, y + PS - 3, 6, 2); R(x + PS - 3, y + PS - 7, 2, 6)
+    D.flush()
   end
-  if crow and crow.i == i then
-    fg(rgb(20, 18, 24))
-    rect(x + 12, y - 3, 7, 4); rect(x + 18, y - 5, 3, 3); rect(x + 9, y - 2, 4, 2)
-    fg(rgb(230, 190, 60)); rect(x + 21, y - 4, 1, 1)
+  if crow and crow.i == i then -- 乌鸦站在苗床后面的草地上
+    fg(lit({ 22, 20, 28 }))
+    rect(x + 12, y + 3, 8, 5); rect(x + 18, y + 1, 4, 4); rect(x + 9, y + 4, 4, 2); rect(x + 14, y + 8, 1, 2); rect(x + 17, y + 8, 1, 2)
+    fg(rgb(235, 195, 60)); rect(x + 22, y + 2, 2, 1)
   end
-  if bees then -- 蜜蜂在两块开花的地之间飞
-    fg(rgb(250, 220, 40))
-    rect(x + bees[1], y + bees[2], 2, 1)
+  if bees then -- 蜜蜂
+    fg(lit(K.OUT)); rect(x + bees[1] - 1, y + bees[2] - 1, 4, 3)
+    fg(rgb(250, 220, 40)); rect(x + bees[1], y + bees[2], 2, 1)
   end
-  if critter_on(i) then
+  if rain then -- 这一格上的几滴雨
+    fg(rgb(170, 190, 230))
+    local r = Rng(rain)
+    for _ = 1, 5 do rect(x + r(PS - 1), y + r(PS - 4), 1, 3) end
+  end
+  if D.critter_on(i) then -- 小动物：先画一层深色的影子，再画本体
     local a = critter
     local sp = K.CRIT[a.kind]
-    fg(lit(sp.c))
-    for r = 1, #sp do
-      local row, w = sp[r], #sp[1]
-      for cx = 1, w do
-        if string.sub(row, cx, cx) == "#" then rect(a.x + (a.dir > 0 and cx - 1 or w - cx), a.y - a.hop + r - 1, 1, 1) end
+    for pass = 0, 1 do
+      fg(lit(pass == 0 and K.OUT or sp.c))
+      for r = 1, #sp do
+        local row, w = sp[r], #sp[1]
+        for cx = 1, w do
+          if string.sub(row, cx, cx) == "#" then rect(a.x + (a.dir > 0 and cx - 1 or w - cx) + 1 - pass, a.y - a.hop + r - pass, 1, 1) end
+        end
       end
     end
   end
 end
 
-local function top_bar(t)
-  local w = weather(div(t, 86400))
-  fg(pack(L.top)); rect(0, 0, W, 6); fg(pack(L.bot)); rect(0, 6, W, FY - 6)
-  local c = civil(t)
-  local ink = (L.sun > 200) and rgb(30, 30, 40) or rgb(235, 235, 240)
-  text(3, 3, string.format("%02d-%02d %02d:%02d", c.m, c.d, c.hh, c.mm), ink, pack(L.bot))
-  -- 天气小图标
-  local ix = W - 16
-  if w.rainy then
-    fg(rgb(170, 175, 185)); rect(ix, 3, 10, 4); rect(ix + 2, 1, 6, 2)
-    fg(rgb(120, 160, 230)); rect(ix + 1, 8, 1, 2); rect(ix + 4, 8, 1, 2); rect(ix + 7, 8, 1, 2)
-  elseif L.night then -- 月牙
-    fg(rgb(230, 225, 190)); rect(ix + 2, 3, 6, 5); rect(ix + 3, 2, 4, 7)
-    fg(pack(L.bot)); rect(ix + 5, 1, 4, 6)
-  else fg(rgb(250, 210, 80)); rect(ix + 2, 2, 7, 7); rect(ix + 4, 0, 3, 11); rect(ix, 4, 11, 3) end
+-- ---------- 板子、顶栏、底栏 ----------
+D.board = function()
+  fg(lit(K.BG)); rect(0, D.TOP, W, D.BAR - D.TOP)
+  fg(lit(K.BG2))
+  for y = D.TOP + 1, D.BAR - 2, 4 do -- 背景的小点（只有两边露出来）
+    local o = mod(y, 8) == 0 and 1 or 4
+    rect(o, y, 1, 1); rect(W - 1 - o, y, 1, 1)
+  end
+  fg(lit(K.OUT)); rect(FX - 1, FY - 1, COLS * PS + 2, ROWS * PS + 6)
+  fg(lit(K.SIDE)); rect(FX, FY + ROWS * PS, COLS * PS, 3)
+  fg(lit(K.UNDER)); rect(FX, FY + ROWS * PS + 3, COLS * PS, 1)
+  -- 板子上沿的一圈草
+  local r = Rng(17)
+  local P, R = D.P, D.R
+  P(K.LAWN1)
+  for x = FX, FX + COLS * PS - 6, 7 do R(x + r(3), FY - 3, 3 + r(2), 3) end
+  D.flush()
 end
 
-local function bottom_bar()
-  local bg = rgb(28, 24, 20)
-  fg(bg); rect(0, BAR, W, H - BAR)
+D.top_bar = function(t)
+  local L = D.L
+  local w = weather(div(t, 86400))
+  fg(pack(L.top)); rect(0, 0, W, 5); fg(pack(L.bot)); rect(0, 5, W, D.TOP - 5)
+  local c = civil(t)
+  local ink = (L.sun > 200) and rgb(30, 30, 40) or rgb(235, 235, 240)
+  text(3, 2, string.format("%02d-%02d %02d:%02d", c.m, c.d, c.hh, c.mm), ink, pack(L.bot))
+  local ix = W - 16
+  if w.rainy then
+    fg(rgb(170, 175, 185)); rect(ix, 2, 10, 4); rect(ix + 2, 0, 6, 2)
+    fg(rgb(120, 160, 230)); rect(ix + 1, 7, 1, 2); rect(ix + 4, 7, 1, 2); rect(ix + 7, 7, 1, 2)
+  elseif L.night then -- 月牙
+    fg(rgb(230, 225, 190)); rect(ix + 2, 2, 6, 5); rect(ix + 3, 1, 4, 7)
+    fg(pack(L.bot)); rect(ix + 5, 0, 4, 6)
+  else fg(rgb(250, 210, 80)); rect(ix + 2, 2, 6, 6); rect(ix + 4, 0, 2, 10); rect(ix, 4, 10, 2) end
+end
+
+D.bottom_bar = function()
+  local bg = rgb(36, 30, 34)
+  fg(bg); rect(0, D.BAR, W, H - D.BAR)
   local p = P[S.cur]
   local line
   if p.k == CROP then
-    line = CROPS[p.c].name .. (is_base(p.c, p.col) and "" or "*") .. "  " .. eta(p)
+    line = CROPS[p.c].name .. (is_base(p.c, p.col) and "" or "*") .. "  " .. D.eta(p)
   elseif p.k == WILD then line = "wild grass"
   elseif p.k == WEEDS then line = "weeds"
   else line = "soil" .. (p.w > 40 and ", damp" or "") end
-  text(3, BAR + 2, line, rgb(230, 225, 210), bg)
+  text(3, D.BAR + 1, line, rgb(240, 232, 215), bg)
   local _, how = next_job(S.cur)
-  if rb.current_tick() < S.msg_t then text(3, BAR + 11, S.msg, rgb(150, 200, 140), bg)
-  else text(3, BAR + 11, "> " .. how, rgb(240, 190, 90), bg) end
+  if rb.current_tick() < S.msg_t then text(3, D.BAR + 10, S.msg, rgb(160, 214, 140), bg)
+  else text(3, D.BAR + 10, "> " .. how, rgb(244, 190, 100), bg) end
 end
 
 -- 开花的相邻两块之间有没有蜜蜂：返回 { [块] = {x, y} }
-local function bees_now(frame)
+D.bees = function(frame)
   local b = {}
   for i = 1, NP do
     local p = P[i]
@@ -1030,8 +1131,7 @@ local function bees_now(frame)
           local k = mod(frame, 16)
           local f = k < 8 and k or 15 - k -- 来回飞
           local host = f < 4 and i or j
-          local hx = 6 + f * 3 + mod(frame * 7, 5)
-          b[host] = { clamp(hx, 2, PS - 4), 8 + mod(frame * 3, 9) }
+          b[host] = { clamp(6 + f * 3 + mod(frame * 7, 5), 2, PS - 4), 4 + mod(frame * 3, 9) }
         end
       end
     end
@@ -1040,61 +1140,61 @@ local function bees_now(frame)
 end
 
 draw_all = function(t, frame, force)
-  L = light_at(t)
-  local l = L.land
-  land = { math.max(l[1], 95), math.max(l[2], 95), math.max(l[3], 105) }
-  if force or not shown[0] then
-    shown = { [0] = true }
-    fg(lit({ 60, 46, 34 })); rect(0, FY, W, BAR - FY) -- 田四周的空地
+  D.L = light_at(t)
+  local l = D.L.land
+  D.land = { math.max(l[1], 95), math.max(l[2], 95), math.max(l[3], 105) }
+  if force or not D.shown[0] then
+    D.shown = { [0] = true }
+    D.board()
   end
-  top_bar(t)
-  local bees = bees_now(frame)
-  local raining = weather(div(t, 86400)).rainy
+  D.top_bar(t)
+  local bees = D.bees(frame)
+  -- 雨：每次只在两块地上落几滴，省得整片重画
+  local rain = {}
+  if weather(div(t, 86400)).rainy then
+    local r = Rng(frame + 1)
+    rain[r(NP) + 1] = frame + 1; rain[r(NP) + 1] = frame + 2
+  end
   for i = 1, NP do
-    local s = plot_sig(i, bees[i] and (bees[i][1] * 100 + bees[i][2]))
-    if raining or shown[i] ~= s then shown[i] = s; draw_plot(i, bees[i]) end
+    local s = D.sig(i, bees[i] and (bees[i][1] * 100 + bees[i][2]), rain[i])
+    if D.shown[i] ~= s then D.shown[i] = s; D.plot(i, bees[i], rain[i]) end
   end
-  if raining then -- 雨点
-    fg(rgb(150, 170, 210))
-    local r = Rng(frame)
-    for _ = 1, 30 do rect(FX + r(COLS * PS), FY + r(ROWS * PS - 4), 1, 3) end
-  end
-  bottom_bar()
+  D.bottom_bar()
   rb.lcd_update()
 end
 
 draw_bag = function(list, sel, page)
-  local bg, ink = rgb(30, 26, 22), rgb(230, 225, 210)
+  local bg, ink = rgb(36, 30, 34), rgb(240, 232, 215)
   local bx, by, bw = 14, 16, 148
   local rows = 7
   local top = clamp(sel - 3, 1, math.max(1, #list - rows + 1))
-  fg(rgb(150, 120, 85)); rect(bx - 1, by - 1, bw + 2, 98)
+  fg(rgb(40, 38, 48)); rect(bx - 2, by - 2, bw + 4, 100)
+  fg(rgb(196, 150, 100)); rect(bx - 1, by - 1, bw + 2, 98)
   fg(bg); rect(bx, by, bw, 96)
   if page == 2 then -- 谷仓：每种作物收过多少；没见过的作物是问号
-    text(bx + 4, by + 3, "BARN", rgb(240, 190, 90), bg)
-    text_r(bx + bw - 4, by + 3, "new kinds " .. new_vars(), rgb(150, 140, 120), bg)
+    text(bx + 4, by + 3, "BARN", rgb(244, 190, 100), bg)
+    text_r(bx + bw - 4, by + 3, "new kinds " .. D.new_vars(), rgb(150, 140, 130), bg)
     for c = 1, #CROPS do
-      local seen = BARN[c] > 0
-      for key in pairs(VAR) do if string.match(key, "^(%d+):") == tostring(c) then seen = true end end
+      local seen = D.seen(c)
       local yy = by + 13 + (c - 1) * 9
       if seen then fg(pack(CROPS[c].col)); rect(bx + 6, yy + 1, 5, 5) end
-      text(bx + 16, yy, seen and CROPS[c].name or "?", seen and ink or rgb(110, 100, 90), bg)
+      text(bx + 16, yy, seen and CROPS[c].name or "?", seen and ink or rgb(110, 100, 100), bg)
       text_r(bx + bw - 6, yy, tostring(BARN[c]), ink, bg)
     end
     rb.lcd_update()
     return
   end
-  text(bx + 4, by + 3, "SEEDS", rgb(240, 190, 90), bg)
-  text_r(bx + bw - 4, by + 3, "new " .. new_vars(), rgb(150, 140, 120), bg)
-  if #list == 0 then text(bx + 4, by + 16, "(none - harvest)", rgb(150, 140, 120), bg) end
+  text(bx + 4, by + 3, "SEEDS", rgb(244, 190, 100), bg)
+  text_r(bx + bw - 4, by + 3, "new " .. D.new_vars(), rgb(150, 140, 130), bg)
+  if #list == 0 then text(bx + 4, by + 16, "(none - harvest)", rgb(150, 140, 130), bg) end
   for n = top, math.min(#list, top + rows - 1) do
     local b = list[n]
     local yy = by + 14 + (n - top) * 10
     fg(pack(b.col)); rect(bx + 6, yy + 1, 6, 6)
     local name = CROPS[b.c].name .. (is_base(b.c, b.col) and "" or "*")
-    text(bx + 16, yy, (n == sel and "> " or "  ") .. name .. " x" .. b.n, n == sel and rgb(240, 190, 90) or ink, bg)
+    text(bx + 16, yy, (n == sel and "> " or "  ") .. name .. " x" .. b.n, n == sel and rgb(244, 190, 100) or ink, bg)
   end
-  text(bx + 4, by + 86, "next: barn", rgb(150, 140, 120), bg)
+  text(bx + 4, by + 86, "next: barn", rgb(150, 140, 130), bg)
   rb.lcd_update()
 end
 end
