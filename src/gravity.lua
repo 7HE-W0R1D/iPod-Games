@@ -300,6 +300,24 @@ local msg, msg_until = nil, 0
 while running do
   for _, e in ipairs(poll()) do
     if e.k == "menu" and not e.rel then running = false
+    elseif e.k == "help" then
+      help_screen("GRAVITY", {
+        "A box of sand, water and",
+        "seeds. The wheel turns",
+        "gravity. Seeds sprout near",
+        "water; plants need water",
+        "nearby or die in 3 days.",
+        "Corner: plants alive.",
+        "",
+        "*Keys",
+        "wheel   turn gravity 45",
+        "select  pour sand / water /",
+        "        seeds (takes turns)",
+        "next    oldest plant",
+        "menu    quit",
+        "hold menu  this help",
+      })
+      for y = 1, GH do for x = 1, GW do draw_cell(y * PW + x) end end
     elseif (e.k == "fwd" or e.k == "back") and not e.rel then
       S.dir = mod(S.dir + ((e.k == "fwd") and 1 or -1), 8)
       build_order()

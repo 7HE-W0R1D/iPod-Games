@@ -48,10 +48,11 @@ for tok in string.gmatch(keys, "[^,]+") do
     elseif name == "fwd" then plan[#plan + 1] = { B.BUTTON_SCROLL_FWD }
     elseif name == "back" then plan[#plan + 1] = { B.BUTTON_SCROLL_BACK }
     elseif name == "flick" then plan[#plan + 1] = { B.BUTTON_SCROLL_FWD, B.BUTTON_SCROLL_FWD, B.BUTTON_SCROLL_FWD, B.BUTTON_SCROLL_FWD, B.BUTTON_SCROLL_FWD, B.BUTTON_SCROLL_FWD }
-    elseif name == "longselect" then
-      plan[#plan + 1] = { B.BUTTON_SELECT }
-      for _ = 1, 30 do plan[#plan + 1] = { B.BUTTON_SELECT + B.BUTTON_REPEAT } end
-      plan[#plan + 1] = { B.BUTTON_SELECT + B.BUTTON_REL }
+    elseif name == "longselect" or name == "longmenu" then
+      local code = (name == "longmenu") and B.BUTTON_MENU or B.BUTTON_SELECT
+      plan[#plan + 1] = { code }
+      for _ = 1, 30 do plan[#plan + 1] = { code + B.BUTTON_REPEAT } end
+      plan[#plan + 1] = { code + B.BUTTON_REL }
     else
       local alias = { next = "RIGHT", prev = "LEFT" }
       local code = B["BUTTON_" .. (alias[name] or string.upper(name))]
@@ -73,7 +74,7 @@ local function next_frame()
     if b == B.BUTTON_SCROLL_BACK then wheel_pos = (wheel_pos - 6) % 96 end
   end end
   if snap_at[frame] and os.getenv("SNAP") then snap(os.getenv("SNAP") .. "_" .. frame .. ".ppm") end
-  if frame >= frames then queue[#queue + 1] = B.BUTTON_MENU end
+  if frame >= frames then queue[#queue + 1] = ((frame - frames) % 2 == 0) and B.BUTTON_MENU or (B.BUTTON_MENU + B.BUTTON_REL) end -- Menu 松开时才退出
   if frame > frames + 30 then error("按了 Menu 之后 30 帧还没退出", 0) end
 end
 

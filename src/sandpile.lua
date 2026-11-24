@@ -170,6 +170,22 @@ local frame = 0
 while running do
   for _, e in ipairs(poll()) do
     if e.k == "menu" and not e.rel then running = false
+    elseif e.k == "help" then
+      help_screen("SANDPILE", {
+        "Sand falls grain by grain.",
+        "Now and then, with no",
+        "warning, a big avalanche.",
+        "Corner: grains so far.",
+        "",
+        "*Keys",
+        "wheel   time speed",
+        "select  drop one grain",
+        "play    centre / random",
+        "next    biggest avalanche",
+        "menu    quit",
+        "hold menu  this help",
+      })
+      draw_all(); draw_corner()
     elseif e.k == "fwd" and not e.rel then speed = clamp(speed + 1, 1, #SPEEDS); acc = 0; show(SPEED_NAMES[speed])
     elseif e.k == "back" and not e.rel then speed = clamp(speed - 1, 1, #SPEEDS); acc = 0; show(SPEED_NAMES[speed])
     elseif e.k == "play" and not e.rel and not e.rep then

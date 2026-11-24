@@ -296,6 +296,23 @@ while running do
   local clicks = 0
   for _, e in ipairs(poll()) do
     if e.k == "menu" and not e.rel then running = false
+    elseif e.k == "help" then
+      help_screen("GOLF", {
+        "One quiet hole a day.",
+        "Turn slowly to aim. Flick",
+        "fast to swing: a faster",
+        "flick hits harder.",
+        "",
+        "*Keys",
+        "wheel slow   aim",
+        "wheel flick  swing",
+        "play    power meter on/off",
+        "select  strokes (in hole)",
+        "wheel   look around after",
+        "        the ball is in",
+        "menu    quit",
+        "hold menu  this help",
+      })
     elseif (e.k == "fwd" or e.k == "back") and not e.rel then clicks = clicks + (e.k == "fwd" and 1 or -1)
     elseif e.k == "play" and not e.rel and not e.rep then meter.on = not meter.on
     elseif select_gesture(e) == "short" and state == "holed" then show_strokes = not show_strokes end

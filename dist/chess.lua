@@ -206,6 +206,8 @@ wheel_speed = function(window)
 end
 
 -- 读出这一帧所有按键事件：{ {k="fwd"}, {k="select", rel=true}, ... }
+-- Menu 特别处理：短按在松开时才发一个 {k="menu"}（退出），按住 0.8 秒发 {k="help"}（说明页）
+local menu_down, menu_fired = nil, false
 poll = function()
   sample_wheel()
   local ev = {}
@@ -218,11 +220,23 @@ poll = function()
       if rel then base = base - B_REL end
       if rep then base = base - B_REP end
       local k = KEY[base]
-      if k then
+      if k == "menu" then
+        if rel then
+          if menu_down and not menu_fired then ev[#ev + 1] = { k = "menu" } end
+          menu_down, menu_fired = nil, false
+        elseif not menu_down then
+          menu_down, menu_fired = rb.current_tick(), false
+        end
+      elseif k then
         if (k == "fwd" or k == "back") and not rel then wheel_note() end
         ev[#ev + 1] = { k = k, rel = rel, rep = rep }
       end
     end
+  end
+  -- 按住不放：不用等系统的重复事件，自己看时间
+  if menu_down and not menu_fired and rb.current_tick() - menu_down >= div(HZ * 4, 5) then
+    menu_fired = true
+    ev[#ev + 1] = { k = "help" }
   end
   return ev
 end
@@ -370,6 +384,39 @@ weather_of = function(day)
     storm_start = 600 + r(480), storm_bearing = r(360), storm_dir = r(2) == 0 and -1 or 1,
   }
 end
+end
+
+-- ---------- 说明页（每个应用里长按 Menu 打开） ----------
+-- lines：一行一句，最多约 28 个字符；转盘上下翻，按任意键关掉。关掉以后应用自己重画整屏。
+local function help_screen(title, lines)
+  local bg, ink, hi, dim = rgb(22, 26, 34), rgb(220, 224, 230), rgb(240, 150, 60), rgb(120, 128, 140)
+  local rows = div(H - 16, 10)
+  local top, shown = 1, -1
+  local maxtop = math.max(1, #lines - rows + 1)
+  while true do
+    if shown ~= top then
+      shown = top
+      fg(bg); rect(0, 0, W, H)
+      text(4, 2, title, hi, bg)
+      if maxtop > 1 then text_r(W - 3, 2, top .. "/" .. maxtop, dim, bg) end
+      for k = 0, rows - 1 do
+        local s = lines[top + k]
+        if s then
+          local c = ink
+          if string.sub(s, 1, 1) == "*" then s, c = string.sub(s, 2), hi end -- 星号开头：标题行
+          text(4, 15 + k * 10, s, c, bg)
+        end
+      end
+      rb.lcd_update()
+    end
+    for _, e in ipairs(poll()) do
+      if e.k == "fwd" and not e.rel then top = clamp(top + 1, 1, maxtop)
+      elseif e.k == "back" and not e.rel then top = clamp(top - 1, 1, maxtop)
+      elseif (e.k == "menu" or not e.rel) and e.k ~= "help" and not e.rep then return end
+    end
+    keep_light()
+    rb.sleep(div(HZ, 20))
+  end
 end
 -- ==== 共用部分结束 ====
 
@@ -1072,6 +1119,7 @@ local function draw_strip()
     end
   end
   if G.result then
+    if G.mode == "over" then text(SX + 4, H - 54, "sel:new", C.title, C.strip) end
     text(SX + 4, H - 40, G.result, C.ink, C.strip)
     text(SX + 4, H - 28, G.wins .. "/" .. G.games, C.ink, C.strip)
   elseif G.note then
@@ -1118,7 +1166,8 @@ local function think_hook(f, t)
   render()
   for _, e in ipairs(poll()) do
     if e.k == "menu" and not e.rel then G.quit = true
-    elseif e.k == "next" and not e.rel and not e.rep then G.watch = not G.watch end
+    elseif e.k == "next" and not e.rel and not e.rep then G.watch = not G.watch
+    elseif e.k == "help" then G.help_req = true end
   end
   if G.quit then return end
   keep_light()
@@ -1159,13 +1208,13 @@ render()
 
 local HELP = {
   "wheel     move cursor",
-  "select    pick / place",
+  "select    pick, place, new",
   "menu      back / quit",
   "prev      undo",
   "next      auto play on/off",
   "play      think 3/10/30s",
   "  (auto: 5/10/20s a move)",
-  "hold sel  this help",
+  "hold menu this help",
   "orange dot    can go here",
   "orange corner capture",
   "",
@@ -1207,11 +1256,11 @@ while not G.quit do
     local g = select_gesture(e)
     if G.help then
       -- 说明页：Play 重开一局；别的键（转盘除外）关掉说明
-      if (not e.rel and not e.rep and e.k ~= "select" and e.k ~= "fwd" and e.k ~= "back") or g == "short" then
+      if (not e.rel and not e.rep and e.k ~= "select" and e.k ~= "fwd" and e.k ~= "back" and e.k ~= "help") or g == "short" then
         if e.k == "play" then new_game() end
         close_help()
       end
-    elseif g == "long" then open_help()
+    elseif g == "long" or e.k == "help" then open_help()
     elseif g == "short" then select_action()
     elseif not e.rel and e.k ~= "select" then
       local k = e.k
@@ -1262,8 +1311,9 @@ while not G.quit do
   end
 
   if G.note and rb.current_tick() > G.note_until then G.note = nil end
-  -- 电脑对电脑：一局结束停 10 秒，再开下一局
-  if G.watch and G.mode == "over" and rb.current_tick() > G.over_at + 10 * HZ and not G.help then new_game() end
+  -- 想棋时长按了 Menu：想完再打开说明
+  if G.help_req and not G.help then G.help_req = nil; open_help() end
+  -- 一局结束（包括电脑对电脑）就停在终局，等你按 Select 再开下一局
   if not G.help then render() end
 
   local waiting = G.watch and rb.current_tick() < (G.wait_until or 0)

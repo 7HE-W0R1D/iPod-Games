@@ -243,6 +243,27 @@ while running do
   local clicked = false
   for _, e in ipairs(poll()) do
     if e.k == "menu" and not e.rel then running = false
+    elseif e.k == "help" then
+      local help_t0 = rb.current_tick()
+      help_screen("POTTERY", {
+        "The wheel is a potter's",
+        "wheel. You only set the",
+        "speed; the hands rise by",
+        "themselves. Fast = wide,",
+        "slow = narrow and tall.",
+        "Too fast and it wobbles.",
+        "Stop for 3 s to finish.",
+        "The kiln takes an hour.",
+        "",
+        "*Keys",
+        "wheel   spin speed",
+        "        (shelf: scroll)",
+        "play    shelf / back",
+        "menu    quit",
+        "hold menu  this help",
+      })
+      local d = rb.current_tick() - help_t0 -- 看说明的时间不算
+      start_tick, last_click = start_tick + d, last_click + d
     elseif e.k == "play" and not e.rel and not e.rep then
       if mode == "shelf" then mode = kiln and "kiln" or "wheel" else mode = "shelf" end
     elseif (e.k == "fwd" or e.k == "back") and not e.rel then

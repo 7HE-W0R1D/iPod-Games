@@ -252,6 +252,20 @@ local last_mode = schedule()
 while running do
   for _, e in ipairs(poll()) do
     if e.k == "menu" and not e.rel then running = false
+    elseif e.k == "help" then
+      help_screen("FLOCK", {
+        "A flock of birds. Each bird",
+        "only watches its neighbours.",
+        "They fly by day, fly lower",
+        "at dusk, roost at night.",
+        "Corner: turns made today.",
+        "",
+        "*Keys",
+        "wheel   time speed",
+        "select  startle them",
+        "menu    quit",
+        "hold menu  this help",
+      })
     elseif e.k == "fwd" and not e.rel then speed = clamp(speed + 1, 1, #STEPS); overlay, overlay_until = STEP_NAMES[speed], rb.current_tick() + 2 * HZ
     elseif e.k == "back" and not e.rel then speed = clamp(speed - 1, 1, #STEPS); overlay, overlay_until = STEP_NAMES[speed], rb.current_tick() + 2 * HZ
     elseif select_gesture(e) == "short" then scare() end

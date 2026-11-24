@@ -187,6 +187,21 @@ local dirty = true
 while running do
   for _, e in ipairs(poll()) do
     if e.k == "menu" and not e.rel then running = false
+    elseif e.k == "help" then
+      help_screen("HALF DOME", {
+        "A valley under Half Dome.",
+        "Light follows the real time",
+        "and season. Fog grows in",
+        "the valley, rises, clears.",
+        "",
+        "*Keys",
+        "wheel   shift time (drifts",
+        "        back when you stop)",
+        "select  show / hide date",
+        "menu    quit",
+        "hold menu  this help",
+      })
+      dirty = true
     elseif e.k == "fwd" and not e.rel then shift = clamp(shift + SHIFT_PER_CLICK, -1440, 1440); last_wheel = rb.current_tick()
     elseif e.k == "back" and not e.rel then shift = clamp(shift - SHIFT_PER_CLICK, -1440, 1440); last_wheel = rb.current_tick()
     elseif select_gesture(e) == "short" then show_date = not show_date; dirty = true end

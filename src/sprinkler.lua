@@ -1,6 +1,6 @@
 -- 洒水器：黄昏的球场，洒水器一个个打开。转盘就是喷头
 -- 转盘：喷头方向（手指在哪，水往哪喷）；转得慢落得近、湿得透，转得快洒得远、只湿一层皮
--- 上一首 / 下一首：水量小 / 大   Play：开 / 关（白天手动开；黄昏自动开，也能关；夜里不开）   Menu：退出
+-- 上一首 / 下一首：水量小 / 大   Play：开 / 关（随时能手动开；黄昏自动开，也能关）   Menu：退出   长按 Menu：说明
 
 local SAVE = "slow_sprinkler.txt"
 local CELL = 4
@@ -90,7 +90,7 @@ local function tick_time()
   end
 end
 
--- 现在的状态："auto" 黄昏自动开；"day" 白天（可手动开）；"night" 不开
+-- 现在的状态："auto" 黄昏自动开；"day" 白天；"night" 夜里（白天和夜里都能按 Play 手动开）
 local function phase(L)
   if L.min >= L.ss - OPEN_BEFORE and L.min <= L.ss + OPEN_AFTER then return "auto" end
   if L.min >= L.sr and L.min < L.ss - OPEN_BEFORE then return "day" end
@@ -241,7 +241,7 @@ local function draw_dirty(budget)
   end
 end
 local function draw_head(x, y, a, light)
-  fg(pack(tint(HEAD, light)))
+  fg(pack(tint(HEAD, { 60 + div(light[1] * 3, 4), 60 + div(light[2] * 3, 4), 60 + div(light[3] * 3, 4) })))
   rect(x - 2, y - 2, 4, 4)
   rect(x + div(COS[a] * 5, 64) - 1, y + div(sin32(a) * 5, 64) - 1, 2, 2)
   for dy = -2, 2, 4 do for dx = -2, 2, 4 do mark_px(x + dx, y + dy) end end
@@ -262,6 +262,27 @@ local last_pos = -1
 while running do
   for _, e in ipairs(poll()) do
     if e.k == "menu" and not e.rel then running = false
+    elseif e.k == "help" then
+      help_screen("SPRINKLER", {
+        "A lawn at dusk. The far",
+        "sprinklers start near",
+        "sunset; you hold the one",
+        "in the middle. Grass soaked",
+        "each day stays green.",
+        "",
+        "*Keys",
+        "wheel   aim: water goes",
+        "        where your finger is",
+        "        slow = near, soaks",
+        "        fast = far, light",
+        "prev    less water",
+        "next    more water",
+        "play    on / off",
+        "menu    quit",
+        "hold menu  this help",
+      })
+      for i = 1, N do mark(i) end
+      draw_dirty(N)
     elseif (e.k == "fwd" or e.k == "back") and not e.rel and last_pos < 0 then
       -- 读不到转盘位置时，退回数事件转喷头
       S.aim = mod(S.aim + ((e.k == "fwd") and 1 or -1), 32)
@@ -269,9 +290,8 @@ while running do
       S.flow = clamp(S.flow + ((e.k == "next") and 1 or -1), 1, #FLOW)
       S.flow_until = rb.current_tick() + 2 * HZ
     elseif e.k == "play" and not e.rel and not e.rep then
-      local ph = phase(L)
-      if ph == "day" then S.manual = not S.manual
-      elseif ph == "auto" then S.auto_off = not S.auto_off end
+      if phase(L) == "auto" then S.auto_off = not S.auto_off else S.manual = not S.manual end
+      S.flow_until = rb.current_tick() + 2 * HZ -- 角落亮一下水量刻度，开着是亮的
     end
   end
 
@@ -290,8 +310,7 @@ while running do
     if L.min ~= light_min then light_min = L.min; make_palette(L) end
   end
   local ph = phase(L)
-  if ph ~= "day" then S.manual = false end
-  if ph ~= "auto" then S.auto_off = false end
+  if ph == "auto" then S.manual = false else S.auto_off = false end
   local open = (ph == "auto" and not S.auto_off) or S.manual
 
   if open then
@@ -312,7 +331,8 @@ while running do
 
   draw_dirty(220)
   -- 水点颜色跟着天色：黄昏是地平线的橘色，白天偏白
-  local dc = (ph == "auto") and pack(mix(L.bot, { 255, 255, 255 }, 30, 100)) or pack(tint({ 225, 235, 245 }, L.land))
+  local dc = (ph == "auto") and pack(mix(L.bot, { 255, 255, 255 }, 30, 100))
+    or pack(mix(tint({ 225, 235, 245 }, L.land), { 150, 175, 215 }, 50, 100)) -- 夜里也看得见
   fg(dc)
   for _, d in ipairs(drops) do rect(div(d.x, 16), div(d.y, 16), 2, 2) end
   draw_head(CX, CY, S.aim, L.land)
@@ -326,7 +346,7 @@ while running do
   if S.flow_until > 0 then
     if rb.current_tick() < S.flow_until then
       for k = 1, #FLOW do
-        fg((k <= S.flow) and dc or pack(tint(HEAD, L.land)))
+        fg((k <= S.flow and open) and dc or pack(tint(HEAD, L.land)))
         rect(3 + (k - 1) * 5, 11 - k * 2, 3, k * 2)
       end
     else

@@ -265,6 +265,24 @@ while running do
     if e.k == "menu" and not e.rel then
       if mode == "log" then mode = "look" else running = false end
       last_draw = -1
+    elseif e.k == "help" then
+      help_screen("LOOKOUT", {
+        "A fire lookout tower. Look",
+        "all around, 360 degrees.",
+        "Mostly nothing happens:",
+        "your job is to watch and",
+        "write it down. Smoke,",
+        "deer, birds, rain, lights.",
+        "",
+        "*Keys",
+        "wheel   turn around",
+        "select  log what you see",
+        "        (time + bearing)",
+        "hold select  read the log",
+        "menu    back / quit",
+        "hold menu  this help",
+      })
+      last_draw = -1
     elseif mode == "log" then
       if e.k == "fwd" and not e.rel then log_top = clamp(log_top + 1, 1, math.max(1, log_len - 13))
       elseif e.k == "back" and not e.rel then log_top = clamp(log_top - 1, 1, math.max(1, log_len))

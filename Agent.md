@@ -12,7 +12,7 @@
   - 不在场也成立：打开时按经过的真实时间补算。
   - 少字：每个应用最多一个角落数字，日志和数字只用英文 / 数字。
   - 每个应用 4 种左右颜色，转盘只管一件事。
-  - Menu 一定能退出。
+  - Menu 一定能退出。`poll()` 把 Menu 拆成两种事件：短按松手时发 `{k="menu"}`，按住 0.8 秒发 `{k="help"}`。应用收到 `help` 就调 `help_screen(标题, 行表)`（它自己读键、阻塞到关掉），回来后自己重画整屏。说明每行不超过 28 个字符，星号开头的行是橙色小标题。
 
 ## 目标平台：Rockbox 的 Lua（最重要）
 
@@ -105,11 +105,11 @@ Rockbox 的 Lua 是改过的 Lua 5.1，和桌面 Lua 差别很大。以下每一
 
 - `./tools/build.sh`：打包，`luac -p` 检查语法，粗查 5.1 语法，跑 `check_limits.lua`。
 - `lua test/run.lua <脚本> <帧数> <时间偏移秒> "<按键脚本>"`：桌面上的假 Rockbox。
-  - 按键脚本例子：`fwd*5,wait*10,flick*3,select,longselect,play,next`。`flick` 是一帧 6 个转盘事件。
+  - 按键脚本例子：`fwd*5,wait*10,flick*3,select,longselect,longmenu,play,next`。`flick` 是一帧 6 个转盘事件。
   - 它会检查：
     - 画图参数必须是整数。
     - 颜色不能越界。
-    - 按 Menu 后 30 帧内必须退出。
+    - 按 Menu 后 30 帧内必须退出（它会交替发按下和松开，因为 Menu 松手才退出）。
     - `rb.buttons` 只在 `require("buttons")` 之后才有。
   - 它会模拟：`rb.wheel_status`，每个转盘事件走 6 格；存档写到 `$TMPDIR/rbfs`。
   - 环境变量：

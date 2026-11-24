@@ -697,6 +697,7 @@ local function draw_strip()
     end
   end
   if G.result then
+    if G.mode == "over" then text(SX + 4, H - 54, "sel:new", C.title, C.strip) end
     text(SX + 4, H - 40, G.result, C.ink, C.strip)
     text(SX + 4, H - 28, G.wins .. "/" .. G.games, C.ink, C.strip)
   elseif G.note then
@@ -743,7 +744,8 @@ local function think_hook(f, t)
   render()
   for _, e in ipairs(poll()) do
     if e.k == "menu" and not e.rel then G.quit = true
-    elseif e.k == "next" and not e.rel and not e.rep then G.watch = not G.watch end
+    elseif e.k == "next" and not e.rel and not e.rep then G.watch = not G.watch
+    elseif e.k == "help" then G.help_req = true end
   end
   if G.quit then return end
   keep_light()
@@ -784,13 +786,13 @@ render()
 
 local HELP = {
   "wheel     move cursor",
-  "select    pick / place",
+  "select    pick, place, new",
   "menu      back / quit",
   "prev      undo",
   "next      auto play on/off",
   "play      think 3/10/30s",
   "  (auto: 5/10/20s a move)",
-  "hold sel  this help",
+  "hold menu this help",
   "orange dot    can go here",
   "orange corner capture",
   "",
@@ -832,11 +834,11 @@ while not G.quit do
     local g = select_gesture(e)
     if G.help then
       -- 说明页：Play 重开一局；别的键（转盘除外）关掉说明
-      if (not e.rel and not e.rep and e.k ~= "select" and e.k ~= "fwd" and e.k ~= "back") or g == "short" then
+      if (not e.rel and not e.rep and e.k ~= "select" and e.k ~= "fwd" and e.k ~= "back" and e.k ~= "help") or g == "short" then
         if e.k == "play" then new_game() end
         close_help()
       end
-    elseif g == "long" then open_help()
+    elseif g == "long" or e.k == "help" then open_help()
     elseif g == "short" then select_action()
     elseif not e.rel and e.k ~= "select" then
       local k = e.k
@@ -887,8 +889,9 @@ while not G.quit do
   end
 
   if G.note and rb.current_tick() > G.note_until then G.note = nil end
-  -- 电脑对电脑：一局结束停 10 秒，再开下一局
-  if G.watch and G.mode == "over" and rb.current_tick() > G.over_at + 10 * HZ and not G.help then new_game() end
+  -- 想棋时长按了 Menu：想完再打开说明
+  if G.help_req and not G.help then G.help_req = nil; open_help() end
+  -- 一局结束（包括电脑对电脑）就停在终局，等你按 Select 再开下一局
   if not G.help then render() end
 
   local waiting = G.watch and rb.current_tick() < (G.wait_until or 0)
