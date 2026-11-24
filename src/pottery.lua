@@ -1,13 +1,13 @@
--- 陶艺转盘：转盘就是拉坯机。你只控制转速，双手自己从底往上走，每个高度上的转速决定那里的粗细。
--- 转盘：转速（拉坯时）/ 横向浏览（看架子时）   Play：看架子 / 回到转盘   Menu：退出
--- 完全停下 3 秒算拉坯完成；进窑一小时后才看到成品。
+-- 陶艺转盘：泥在拉坯机上自己转。转盘把双手上下移动，上一首 / 下一首把那一层收窄 / 甩宽。
+-- 转盘：手的高度（看架子时横向浏览）   上一首 / 下一首：收窄 / 加宽   Select 或 Play：送进窑
+-- 长按 Select：看架子   Menu：退出   长按 Menu：说明
+-- 收窄的地方会被拔高，加宽的地方变扁；悬出去太多会歪掉。进窑一小时后才看到成品，窑上的小钟走一圈就好了。
 
 local SAVE = "slow_pottery.txt"
 local NL = 30                  -- 层数
-local PASS_TICKS = 30 * HZ     -- 手从底走到顶大约 30 秒
 local KILN_SECONDS = 3600      -- 烧窑一小时
-local STOP_TICKS = 3 * HZ      -- 停多久算完成
-local FAST = 38                -- 超过这个转速（格/秒）泥开始失稳
+local RMIN, RMAX = 4, 46       -- 每层半径的范围
+local OVERHANG = 10            -- 比下面一层宽出这么多就开始失稳
 local CX, BASE = div(W, 2), H - 10
 
 local CLAY = { 168, 112, 80 }
@@ -125,6 +125,59 @@ local function draw_wheel_scene(p, phase, hand_layer, wob)
   rb.lcd_update()
 end
 
+-- 烧窑的小钟：转一圈 = 一小时。走过的部分填上火色，一根指针指着现在
+local CLK_R = 10
+local CLK_COS = { [0] = 64, 62, 55, 45, 32, 17, 0, -17, -32, -45, -55, -62, -64, -62, -55, -45, -32, -17, 0, 17, 32, 45, 55, 62 }
+local CLK_SEC -- 每个点属于哪个扇区（从 12 点顺时针 0..23；圆外是 -1），第一次用时算一次
+local function clock_sectors()
+  CLK_SEC = {}
+  for y = -CLK_R, CLK_R do
+    local row = {}
+    for x = -CLK_R, CLK_R do
+      local bi = -1
+      if x * x + y * y <= CLK_R * CLK_R then
+        local best = -1000000
+        for k = 0, 23 do
+          local d = x * CLK_COS[mod(k + 18, 24)] + y * CLK_COS[mod(k + 12, 24)]
+          if d > best then best, bi = d, k end
+        end
+      end
+      row[x] = bi
+    end
+    CLK_SEC[y] = row
+  end
+end
+local function draw_clock(cx, cy, done, fire)
+  if not CLK_SEC then clock_sectors() end
+  local face, rim, ink = rgb(52, 42, 36), rgb(120, 96, 80), rgb(235, 225, 200)
+  local hot = pack(fire)
+  local filled = div(done * 24, KILN_SECONDS) -- 24 个扇区里走过了几个
+  for y = -CLK_R, CLK_R do
+    local row = CLK_SEC[y]
+    local x = -CLK_R
+    while x <= CLK_R and row[x] < 0 do x = x + 1 end
+    if x <= CLK_R then
+      fg(rim); rect(cx + x - 1, cy + y, 1, 1); rect(cx - x + 1, cy + y, 1, 1)
+      -- 按连续的同色段画，一行最多三四段
+      while x <= CLK_R and row[x] >= 0 do
+        local on = row[x] < filled
+        local x0 = x
+        while x <= CLK_R and row[x] >= 0 and (row[x] < filled) == on do x = x + 1 end
+        fg(on and hot or face); rect(cx + x0, cy + y, x - x0, 1)
+      end
+    end
+  end
+  fg(rim); rect(cx - 1, cy - CLK_R - 1, 3, 1); rect(cx - 1, cy + CLK_R + 1, 3, 1)
+  -- 刻度：12、3、6、9 点
+  fg(rim); rect(cx, cy - CLK_R + 1, 1, 2); rect(cx, cy + CLK_R - 2, 1, 2); rect(cx - CLK_R + 1, cy, 2, 1); rect(cx + CLK_R - 2, cy, 2, 1)
+  -- 指针
+  local a = div(done * 24, KILN_SECONDS)
+  local dx, dy = CLK_COS[mod(a + 18, 24)], CLK_COS[mod(a + 12, 24)]
+  fg(ink)
+  for k = 0, CLK_R - 2 do rect(cx + div(dx * k, 64), cy + div(dy * k, 64), 1, 1) end
+  rect(cx, cy, 1, 1)
+end
+
 local function draw_kiln(t)
   local tk = rb.current_tick()
   local night = rgb(20, 16, 15)
@@ -177,6 +230,7 @@ local function draw_kiln(t)
     rect(x, 112 - h, 2, h)
   end
   fg(mortar); rect(CX - 18, 74, 36, 2)
+  draw_clock(24, 20, p, fire)
   text_r(W - 2, 2, tostring(#shelf), rgb(120, 105, 95), night)
   rb.lcd_update()
 end
@@ -211,10 +265,37 @@ load()
 light_start()
 local mode = "wheel"           -- wheel / kiln / shelf
 local pot = new_lump()
-local started, start_tick, last_click = false, 0, 0
-local sm, wob, phase, bad = 0, 0, 0, false
+local hand = 1                 -- 手在第几层：开局在最宽的底层
+local shaped = false           -- 动过泥才能送窑，免得误触
+local wob, phase, bad = 0, 0, false
 local scroll = 0
 local running = true
+
+-- 收窄 / 加宽手所在的那一层（上下各一层跟着动一半）
+local function shape(dr)
+  shaped = true
+  for i = math.max(1, hand - 1), math.min(NL, hand + 1) do
+    local d = (i == hand) and dr or div(dr, 2)
+    pot.r[i] = clamp(pot.r[i] + d, RMIN, RMAX)
+  end
+  -- 收窄的地方被拔高，加宽的地方变扁
+  local h = pot.h[hand]
+  if dr < 0 and pot.r[hand] < 16 then h = h + 1 elseif dr > 0 and pot.r[hand] > 20 then h = h - 1 end
+  pot.h[hand] = clamp(h, 1, 4)
+  -- 泥是连着的：相邻两层粗细差得不能太多
+  for i = 2, NL do pot.r[i] = clamp(pot.r[i], pot.r[i - 1] - 3, pot.r[i - 1] + 3) end
+  for i = NL - 1, 1, -1 do pot.r[i] = clamp(pot.r[i], pot.r[i + 1] - 3, pot.r[i + 1] + 3) end
+end
+
+-- 悬出去太多就失稳：上面一层比下面宽出很多
+local function overhang()
+  local m, lo = 0, pot.r[1]
+  for i = 2, NL do
+    if pot.r[i] - lo > m then m = pot.r[i] - lo end
+    if pot.r[i] < lo then lo = pot.r[i] end
+  end
+  return m
+end
 
 local function finish_throw()
   local p = pot
@@ -222,7 +303,7 @@ local function finish_throw()
   kiln = { pot = p, ready = now() + KILN_SECONDS }
   save()
   mode = "kiln"
-  pot, started, sm, wob, bad = new_lump(), false, 0, 0, false
+  pot, hand, shaped, wob, bad = new_lump(), 1, false, 0, false
 end
 
 local function check_kiln()
@@ -236,77 +317,63 @@ local function check_kiln()
   end
 end
 
+local function back_from_shelf() mode = kiln and "kiln" or "wheel" end
+
 if kiln then mode = "kiln" end
 check_kiln()
 
 while running do
-  local clicked = false
   for _, e in ipairs(poll()) do
+    local g = select_gesture(e)
     if e.k == "menu" and not e.rel then running = false
     elseif e.k == "help" then
-      local help_t0 = rb.current_tick()
       help_screen("POTTERY", {
-        "The wheel is a potter's",
-        "wheel. You only set the",
-        "speed; the hands rise by",
-        "themselves. Fast = wide,",
-        "slow = narrow and tall.",
-        "Too fast and it wobbles.",
-        "Stop for 3 s to finish.",
-        "The kiln takes an hour.",
+        "The clay spins on the",
+        "wheel. Move your hands up",
+        "and down and shape each",
+        "layer. Narrow = taller,",
+        "wide = flatter. Lean out",
+        "too far and it wobbles.",
+        "The kiln takes an hour;",
+        "the little clock shows",
+        "how far along it is.",
         "",
         "*Keys",
-        "wheel   spin speed",
+        "wheel   hands up / down",
         "        (shelf: scroll)",
-        "play    shelf / back",
+        "next    widen",
+        "prev    narrow",
+        "select  fire it",
+        "play    fire it",
+        "hold select  shelf",
         "menu    quit",
         "hold menu  this help",
       })
-      local d = rb.current_tick() - help_t0 -- 看说明的时间不算
-      start_tick, last_click = start_tick + d, last_click + d
-    elseif e.k == "play" and not e.rel and not e.rep then
-      if mode == "shelf" then mode = kiln and "kiln" or "wheel" else mode = "shelf" end
-    elseif (e.k == "fwd" or e.k == "back") and not e.rel then
-      clicked = true
-      if mode == "shelf" then scroll = math.max(0, scroll + (e.k == "fwd" and 4 or -4)) end
+    elseif g == "long" then
+      if mode == "shelf" then back_from_shelf() else mode = "shelf" end
+    elseif mode == "shelf" then
+      if (e.k == "fwd" or e.k == "back") and not e.rel then scroll = math.max(0, scroll + (e.k == "fwd" and 4 or -4))
+      elseif g == "short" or (e.k == "play" and not e.rel and not e.rep) then back_from_shelf() end
+    elseif mode == "kiln" then
+      if e.k == "play" and not e.rel and not e.rep then mode = "shelf" end
+    else -- wheel
+      if e.k == "fwd" and not e.rel then hand = clamp(hand + 1, 1, NL)
+      elseif e.k == "back" and not e.rel then hand = clamp(hand - 1, 1, NL)
+      elseif e.k == "next" and not e.rel then shape(2)
+      elseif e.k == "prev" and not e.rel then shape(-2)
+      elseif (g == "short" or (e.k == "play" and not e.rel and not e.rep)) and shaped then finish_throw() end
     end
   end
-  local tk = rb.current_tick()
 
   if mode == "wheel" then
-    if clicked then
-      last_click = tk
-      if not started then started, start_tick = true, tk end
+    phase = phase + 3
+    -- 悬出去太多：慢慢歪掉
+    if overhang() > OVERHANG then wob = wob + 2 elseif wob > 0 and not bad then wob = wob - 1 end
+    if wob > 70 and not bad then
+      bad = true
+      for i = hand, NL do pot.off[i] = clamp(div((i - hand) * (i - hand), 6), 0, 40) end
     end
-    sm = div(sm * 3 + wheel_rate(div(HZ, 2)), 4)
-    phase = phase + div(sm, 3) + (sm > 0 and 1 or 0)
-    local hand
-    if started then
-      local hpos = div((tk - start_tick) * NL, PASS_TICKS) + 1
-      if hpos <= NL then hand = hpos end
-      if hand then
-        -- 转得越快，那一层甩得越宽、越扁；转得慢，收窄、拔高
-        local tr = clamp(6 + sm, 5, 46)
-        local th = sm < 10 and 4 or (sm < 20 and 3 or (sm < 30 and 2 or 1))
-        for i = math.max(1, hand - 1), math.min(NL, hand + 1) do
-          if pot.r[i] < tr then pot.r[i] = pot.r[i] + 1 elseif pot.r[i] > tr then pot.r[i] = pot.r[i] - 1 end
-        end
-        -- 泥是连着的：相邻两层粗细差得不能太多
-        for i = 2, NL do pot.r[i] = clamp(pot.r[i], pot.r[i - 1] - 3, pot.r[i - 1] + 3) end
-        if mod(tk, 4) == 0 then
-          if pot.h[hand] < th then pot.h[hand] = pot.h[hand] + 1 elseif pot.h[hand] > th then pot.h[hand] = pot.h[hand] - 1 end
-        end
-      end
-      -- 太快就失稳，歪掉
-      if sm > FAST then wob = wob + 2 elseif wob > 0 and not bad then wob = wob - 1 end
-      if wob > 70 and not bad then
-        bad = true
-        local from = hand or NL
-        for i = from, NL do pot.off[i] = clamp(div((i - from) * (i - from), 6), 0, 40) end
-      end
-      if tk - last_click > STOP_TICKS then finish_throw() end
-    end
-    if mode == "wheel" then draw_wheel_scene(pot, phase, hand, wob) end
+    draw_wheel_scene(pot, phase, hand, wob)
   elseif mode == "kiln" then
     check_kiln()
     if mode == "kiln" then draw_kiln(now()) end

@@ -742,7 +742,7 @@ while running do
       else spray(CX, CY, S.aim, 5 + rnd(5), 1, 3) end            -- 慢：近、集中、透
     end
   end
-  if ph == "auto" then -- 远处的洒水器自己转
+  if ph == "auto" or open then -- 远处的洒水器：黄昏自己转；你手动开的时候也跟着开
     for _, h in ipairs(HEADS) do
       if mod(frame, 6) == 0 then h.a = mod(h.a + 1, 32) end
       if mod(frame, 2) == 0 then spray(h.x, h.y, h.a, 3 + rnd(h.r - 2), 1, 2) end

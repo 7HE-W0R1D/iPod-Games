@@ -421,8 +421,10 @@ end
 -- ==== 共用部分结束 ====
 
 -- 鸟群：十几只鸟各自只看身边的同伴，聚成一整团飞行的形状（Boids）
--- 转盘：时间流速   Select：惊扰一下   Menu：退出
+-- 转盘：时间流速   Select：惊扰一下   Menu：退出   长按 Menu：说明
 -- 白天飞，傍晚越飞越低，夜里落成一排，天亮再起飞。角落的数字是今天转了多少次弯。
+-- 天空跟着时间和天气变：晴天的傍晚有晚霞和紫色暮光，雨天发灰，雾天地平线发白，夜里有星星。
+-- 夜里惊扰：几只鸟飞起来绕一下就落回电线；连着按，它们习惯了，飞起来的越来越少。
 
 local SAVE = "slow_flock.txt"
 local MAXB = 15
@@ -438,9 +440,26 @@ local TRAIL = 6
 local STEPS = { HZ, div(HZ, 2), div(HZ, 4), div(HZ, 8), div(HZ, 14), div(HZ, 25) }
 local STEP_NAMES = { "1 fps", "2 fps", "4 fps", "8 fps", "14 fps", "25 fps" }
 
--- 4 种颜色：底、尾迹暗、尾迹亮、鸟
-local PAL_DAY = { rgb(10, 20, 52), rgb(40, 60, 110), rgb(90, 120, 180), rgb(225, 235, 255) }
-local PAL_NIGHT = { rgb(0, 0, 0), rgb(18, 22, 40), rgb(40, 48, 80), rgb(120, 130, 160) }
+-- ---------- 天空 ----------
+-- 关键帧：{锚点, 偏移分钟, 天顶, 中间, 地平线}。傍晚的紫色取自一张暮光天空的照片。
+local SKY = {
+  { "sr", -80, { 6, 8, 22 }, { 10, 12, 32 }, { 18, 20, 44 } },        -- 夜
+  { "sr", -30, { 30, 40, 80 }, { 70, 78, 120 }, { 140, 130, 160 } },  -- 黎明灰蓝
+  { "sr", 20, { 80, 110, 170 }, { 150, 160, 200 }, { 235, 200, 180 } }, -- 日出，地平线微粉
+  { "sr", 100, { 60, 120, 200 }, { 110, 165, 225 }, { 195, 220, 240 } }, -- 白天
+  { "ss", -80, { 60, 120, 200 }, { 115, 165, 222 }, { 205, 222, 236 } },
+  { "ss", -30, { 80, 115, 185 }, { 170, 170, 190 }, { 250, 200, 140 } }, -- 金色
+  { "ss", 0, { 90, 80, 150 }, { 200, 120, 140 }, { 250, 150, 90 } },     -- 晚霞
+  { "ss", 20, { 50, 62, 130 }, { 100, 78, 150 }, { 165, 115, 155 } },    -- 紫色暮光
+  { "ss", 45, { 28, 30, 80 }, { 55, 45, 100 }, { 90, 60, 110 } },        -- 入夜深紫
+  { "ss", 85, { 6, 8, 22 }, { 10, 12, 32 }, { 18, 20, 44 } },
+}
+-- 晚霞里被照亮的云：{偏移分钟, 颜色}
+local GLOWK = { { -50, { 250, 225, 190 } }, { -20, { 255, 190, 120 } }, { 0, { 255, 140, 120 } },
+                { 20, { 200, 120, 175 } }, { 45, { 70, 50, 95 } } }
+local BAND = 6                     -- 天空分成 22 条横带
+local NB = div(H + BAND - 1, BAND)
+local SC = { key = -1 }            -- 天空缓存：每分钟算一次
 
 -- ---------- 状态 ----------
 local t0 = now()
@@ -452,6 +471,7 @@ local speed = #STEPS
 local scared_until = 0
 local steps = 0
 local last_oct, oct_stable, oct_cand = -1, 0, -1
+local wary, wary_t = 0, 0 -- 夜里被惊扰了几次（每 30 秒忘掉一次）
 
 local function load()
   local s = load_kv(SAVE)
@@ -531,7 +551,12 @@ local function step(mode, ty)
     local b = birds[i]
     if mode == "night" then
       local sx, sy = perch_slot(i)
-      if b.perched then
+      if b.fly_until and rb.current_tick() < b.fly_until then
+        -- 被惊起：在电线上方乱飞一小会儿
+        b.vx = b.vx + div(b.hx - b.x, 40) + rnd(9) - 4
+        b.vy = b.vy + div(b.hy - b.y, 40) + rnd(9) - 4
+        limit(b)
+      elseif b.perched then
         b.x, b.y, b.vx, b.vy = sx, sy, 0, 0
       else
         local dx, dy = sx - b.x, sy - b.y
@@ -621,6 +646,24 @@ end
 
 local function scare()
   if #birds == 0 then return end
+  if schedule() == "night" then
+    -- 夜里：只惊起几只，很快落回来；按得越多，它们越不当回事
+    local t = now()
+    wary = math.max(0, wary - div(t - wary_t, 30)); wary_t = t
+    local fly = clamp(6 - wary * 2 + rnd(3), 0, #birds)
+    wary = wary + 1
+    local hop = fly == 0 -- 都不飞了：只有一只扑腾一下
+    if hop then fly = 1 end
+    for _ = 1, fly do
+      local b = birds[rnd(#birds) + 1]
+      b.perched = false
+      b.vx, b.vy = rnd(41) - 20, hop and -10 or -VMAX
+      b.hx = b.x + (rnd(61) - 30) * FP
+      b.hy = (PERCH_Y - (hop and 4 or 25 + rnd(40))) * FP
+      b.fly_until = rb.current_tick() + (hop and div(HZ, 3) or (2 * HZ + rnd(2 * HZ)))
+    end
+    return
+  end
   local cx, cy = 0, 0
   for _, b in ipairs(birds) do cx, cy = cx + b.x, cy + b.y end
   cx, cy = div(cx, #birds), div(cy, #birds)
@@ -636,20 +679,117 @@ local function scare()
 end
 
 -- ---------- 画面 ----------
+-- 在关键帧之间插值（跨午夜首尾相接）
+local function sky_at(L)
+  local m, n, pts = L.min, #SKY, {}
+  for i, k in ipairs(SKY) do pts[i] = (k[1] == "sr" and L.sr or L.ss) + k[2] end
+  local a, b, num_, den
+  if m < pts[1] or m >= pts[n] then
+    a, b, den = n, 1, pts[1] + 1440 - pts[n]
+    num_ = m >= pts[n] and m - pts[n] or m + 1440 - pts[n]
+  else
+    for i = 1, n - 1 do
+      if m >= pts[i] and m < pts[i + 1] then a, b, num_, den = i, i + 1, m - pts[i], pts[i + 1] - pts[i]; break end
+    end
+  end
+  local ka, kb = SKY[a], SKY[b]
+  return mix(ka[3], kb[3], num_, den), mix(ka[4], kb[4], num_, den), mix(ka[5], kb[5], num_, den)
+end
+
+-- 晚霞云的颜色和亮度（0..100）
+local function glow_at(L, strength)
+  local d = L.min - L.ss
+  if d < GLOWK[1][1] or d > GLOWK[#GLOWK][1] then return nil, 0 end
+  for i = 1, #GLOWK - 1 do
+    local a, b = GLOWK[i], GLOWK[i + 1]
+    if d >= a[1] and d <= b[1] then
+      local k = d > 25 and div((45 - d) * strength, 20) or strength
+      return mix(a[2], b[2], d - a[1], b[1] - a[1]), clamp(k, 0, 100)
+    end
+  end
+  return nil, 0
+end
+
+local function lum(c) return div(c[1] * 3 + c[2] * 6 + c[3], 10) end
+
+-- 算好这一分钟的天：每条横带的颜色、鸟和尾迹的颜色、云和星星
+local function build_sky(L)
+  local top, midc, bot = sky_at(L)
+  local w = weather_of(L.day)
+  local r = Rng(hash(L.day, 77))
+  local strength = 30 + r(71)                       -- 每天的晚霞强弱不一样
+  if w.rainy then
+    local grey = { 105, 110, 122 }
+    local dark = lum(midc) < 60 and 2 or 1
+    top, midc, bot = mix(top, grey, 5, 8), mix(midc, grey, 5, 8), mix(bot, grey, 5, 8)
+    if dark == 2 then top, midc, bot = mix(top, { 0, 0, 0 }, 1, 2), mix(midc, { 0, 0, 0 }, 1, 2), mix(bot, { 0, 0, 0 }, 1, 2) end
+    strength = 0
+  elseif w.fog > 50 and lum(bot) > 60 then          -- 雾大：地平线发白，渐变变平
+    local haze, k = mix(bot, { 215, 215, 222 }, 2, 3), w.fog - 50
+    bot, midc = mix(bot, haze, k * 2, 100), mix(midc, haze, k, 100)
+    strength = div(strength, 2)
+  end
+  local bright = lum(midc) > 90
+  local bird = bright and { 28, 24, 44 } or (lum(midc) > 45 and { 235, 225, 240 } or { 150, 155, 185 })
+  SC.band, SC.t1, SC.t2 = {}, {}, {}
+  for i = 0, NB - 1 do
+    local c
+    if i * 2 < NB then c = mix(top, midc, i * 2, NB) else c = mix(midc, bot, i * 2 - NB, NB) end
+    SC.band[i] = pack(c)
+    SC.t1[i] = pack(mix(c, bird, 1, 3)); SC.t2[i] = pack(mix(c, bird, 2, 3))
+  end
+  SC.bird, SC.bot = pack(bird), pack(bot)
+  SC.wire = pack(mix(bot, bird, 1, 2))
+  SC.text = pack(mix(bot, bird, 1, 2))
+  -- 云：位置由日期决定；白天淡白，晚霞时被照亮，其余时候是比天暗一点的影子
+  local gc, gk = glow_at(L, strength)
+  SC.clouds = {}
+  if not w.rainy then
+    for k = 1, 3 + r(3) do
+      local y = 50 + r(60)
+      local band = mix(top, bot, y, H)
+      local base = bright and mix(band, { 255, 255, 255 }, 1, 3) or mix(band, { 0, 0, 0 }, 1, 5)
+      local c = gc and mix(base, gc, gk, 100) or base
+      SC.clouds[k] = { x = r(W + 40) - 20, y = y, w = 24 + r(50), h = 2 + r(2), c = pack(c),
+                       e = pack(mix(c, band, 1, 2)) }
+    end
+  end
+  -- 星星：暮光后半段开始出现，越晚越多
+  local d = L.min - L.ss
+  local ns = 0
+  if d > 25 or L.min < L.sr - 20 then ns = (d > 25 and d < 85) and div((d - 25) * 20, 60) or 20 end
+  if w.rainy then ns = div(ns, 4) end
+  local sr_ = Rng(hash(L.day, 5))
+  SC.stars = {}
+  for k = 1, ns do SC.stars[k] = { sr_(W), sr_(H - 30) } end
+  SC.star = pack(mix(top, { 235, 230, 255 }, 3, 4))
+end
+
 local overlay, overlay_until = nil, 0
 local function draw(mode, L)
-  local pal = (mode == "night") and PAL_NIGHT or PAL_DAY
-  fg(pal[1]); rect(0, 0, W, H)
-  if mode == "night" then fg(pal[2]); rect(0, PERCH_Y + 2, W, 1) end -- 夜里那根电线
+  local key = L.day * 1440 + L.min
+  if SC.key ~= key then SC.key = key; build_sky(L) end
+  for i = 0, NB - 1 do fg(SC.band[i]); rect(0, i * BAND, W, BAND) end
+  fg(SC.star)
+  for k, st in ipairs(SC.stars) do
+    if mod(steps + k * 7, 23) ~= 0 then rect(st[1], st[2], 1, 1) end -- 偶尔闪一下
+  end
+  for _, c in ipairs(SC.clouds) do
+    local q = div(c.w, 4)
+    fg(c.e); rect(c.x - 4, c.y + 1, c.w + 8, c.h)
+    fg(c.c); rect(c.x, c.y, c.w, c.h); rect(c.x + q, c.y - 1, c.w - q * 2, 1); rect(c.x + q + 2, c.y - 2, q, 1)
+  end
+  if mode == "night" then fg(SC.wire); rect(0, PERCH_Y + 2, W, 1) end -- 夜里那根电线
   for _, b in ipairs(birds) do
     for t = TRAIL, 2, -1 do
-      fg(t > 3 and pal[2] or pal[3])
+      local bi = clamp(div(b.ty[t], BAND), 0, NB - 1)
+      fg(t > 3 and SC.t1[bi] or SC.t2[bi])
       rect(b.tx[t], b.ty[t], 1, 1)
     end
-    fg(pal[4]); rect(b.tx[1], b.ty[1], 2, 2)
+    fg(SC.bird); rect(b.tx[1], b.ty[1], 2, 2)
   end
-  text_r(W - 2, H - 9, tostring(turns), pal[3], pal[1])
-  if overlay and rb.current_tick() < overlay_until then text(2, 2, overlay, pal[3], pal[1]) end
+  text_r(W - 2, H - 9, tostring(turns), SC.text, SC.band[NB - 1])
+  if overlay and rb.current_tick() < overlay_until then text(2, 2, overlay, SC.text, SC.band[0]) end
   rb.lcd_update()
 end
 
@@ -680,11 +820,18 @@ while running do
         "only watches its neighbours.",
         "They fly by day, fly lower",
         "at dusk, roost at night.",
+        "The sky follows the hour",
+        "and the weather: sunset",
+        "glow, purple dusk, grey",
+        "rain, stars at night.",
         "Corner: turns made today.",
         "",
         "*Keys",
         "wheel   time speed",
         "select  startle them",
+        "        (night: a few fly up",
+        "        and come back; they",
+        "        get used to it)",
         "menu    quit",
         "hold menu  this help",
       })

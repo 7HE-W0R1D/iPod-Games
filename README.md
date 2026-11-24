@@ -1,21 +1,23 @@
 # iPod Nano 2 慢应用
 
-十个跑在 iPod Nano 第二代（[Rockbox](https://www.rockbox.org/) 固件）上的 Lua 小程序。它们几乎不需要你做什么：规则很少，画面跟着真实的时间和季节慢慢变，你只是偶尔路过看一眼。
+十二个跑在 iPod Nano 第二代（[Rockbox](https://www.rockbox.org/) 固件）上的 Lua 小程序。它们几乎不需要你做什么：规则很少，画面跟着真实的时间和季节慢慢变，你只是偶尔路过看一眼。
 
-Ten slow, ambient Lua apps for the iPod Nano 2G running Rockbox: a sandpile, a flock of birds, Half Dome in fog, a fire lookout tower, a pottery wheel, a quiet one-hole golf course, a Game of Life whose rules turn with the wheel, a sandbox with turning gravity, a dusk lawn sprinkler, and a chess opponent whose thinking you can watch.
+Twelve slow, ambient Lua apps for the iPod Nano 2G running Rockbox: a sandpile, a flock of birds, Half Dome in fog, a fire lookout tower, a pottery wheel, a quiet one-hole golf course, a Game of Life whose rules turn with the wheel, a sandbox with turning gravity, a dusk lawn sprinkler, a chess opponent whose thinking you can watch, a tiny turn-based cave crawl, and a small farm that grows on real time.
 
 | | |
 | --- | --- |
-| ![沙堆](screenshots/01_sandpile_center.png) | ![鸟群](screenshots/03_flock_day.png) |
+| ![沙堆](screenshots/01_sandpile_center.png) | ![鸟群：紫色暮光](screenshots/04_flock_dusk.png) |
 | ![穹顶与雾霭](screenshots/08_dome_alpenglow.png) | ![瞭望塔](screenshots/12_tower_smoke.png) |
-| ![陶艺转盘](screenshots/16_pottery_shelf.png) | ![高尔夫](screenshots/18_golf_evening.png) |
+| ![陶艺转盘：烧窑的小钟](screenshots/15b_pottery_kiln_late.png) | ![高尔夫](screenshots/18_golf_evening.png) |
 | ![规则旋钮：生命游戏](screenshots/19_rules_life.png) | ![规则旋钮：迷宫](screenshots/20_rules_maze.png) |
 | ![旋转重力](screenshots/22_gravity_turned.png) | ![洒水器：黄昏](screenshots/23_sprinkler_dusk.png) |
 | ![国际象棋：选子时的落点提示](screenshots/25_chess_pick.png) | ![国际象棋：落子](screenshots/26_chess_target.png) |
+| ![地下城](screenshots/31_dungeon_deeper.png) | ![小农场](screenshots/32_farm_day.png) |
+| ![鸟群：晚霞](screenshots/28_flock_sunset.png) | ![小农场：谷仓](screenshots/34_farm_barn.png) |
 
 完整的设计思路见 [iPod Nano 2 慢应用.md](iPod%20Nano%202%20慢应用.md)。
 
-## 十个应用
+## 十二个应用
 
 ### 沙堆 `sandpile.lua`
 
@@ -35,11 +37,12 @@ Ten slow, ambient Lua apps for the iPod Nano 2G running Rockbox: a sandpile, a f
 15 只鸟按 Boids 的三条规则飞：分离、对齐、聚拢。
 
 - **作息**：跟着真实时间。白天飞，傍晚越飞越低，夜里落成一排停在电线上，天亮再起飞。
+- **天空**：跟着时间和天气变色。晴天傍晚先是金色，然后是橘粉的晚霞，日落后是紫色的暮光，入夜变成深紫，夜里有星星。每天的晚霞浓淡不一样，地平线上方几条云被照亮。雨天整片天发灰，雾大时地平线发白。白天鸟是深色剪影，夜里是浅色的。
 - **掉队**：偶尔有一只离群，在屏幕边缘独自飞一阵，有时回来，有时就不见了。
 - **角落数字**：今天整群一共转了多少次弯。
 - **操作**：
   - 转盘：时间流速，从每秒 1 帧到 25 帧。
-  - Select：惊扰一下，鸟群炸散，再慢慢聚回来。
+  - Select：惊扰一下，鸟群炸散，再慢慢聚回来。夜里只惊起几只，在电线上方绕一下就落回来；连着按，它们习惯了，飞起来的越来越少，最后只有一只扑腾一下（半分钟忘掉一次）。
 
 ### 穹顶与雾霭 `dome.lua`
 
@@ -64,15 +67,17 @@ Ten slow, ambient Lua apps for the iPod Nano 2G running Rockbox: a sandpile, a f
 
 ### 陶艺转盘 `pottery.lua`
 
-转盘就是拉坯机。你只控制转速，一双手自己从底部走到顶部，大约 30 秒。
+泥在拉坯机上自己转，你用转盘把双手上下移动，一层一层捏形状。
 
-- **成形**：手经过某个高度时，转得快，那一层就甩得宽；转得慢，就收窄、拔高。转太快泥会歪掉。
-- **完成**：完全停下 3 秒算拉坯完成。
-- **烧窑**：进窑要真实的一小时，釉色每次随机。
+- **成形**：手开始时在最宽的底层。收窄的那一层会被拔高，加宽的那一层会变扁。不动它，形状就不变。
+- **歪掉**：某一层比下面宽出太多（悬出去），泥会慢慢歪掉，算残次品。
+- **烧窑**：进窑要真实的一小时，釉色每次随机。左上角的小钟走一圈就烧好了，走过的部分是火色。
 - **架子**：烧好的罐子摆上木架子，歪掉的放在最下面一格。
 - **操作**：
-  - 转盘：转速；看架子时用来横向浏览。
-  - Play：看架子 / 回到转盘。
+  - 转盘：手往上 / 往下一层；看架子时用来横向浏览。
+  - 下一首 / 上一首：加宽 / 收窄手所在的那一层，按住连续变。
+  - Select 或 Play：送进窑（至少捏过一下才行）。
+  - 长按 Select：看架子 / 回来。烧窑时按 Play 也能看架子。
 
 ### 高尔夫 `golf.lua`
 
@@ -122,7 +127,7 @@ Ten slow, ambient Lua apps for the iPod Nano 2G running Rockbox: a sandpile, a f
 
 ### 洒水器 `sprinkler.lua`
 
-俯视一片草地，中间是你的喷头，远处两个自动洒水器自己转。
+俯视一片草地，中间是你的喷头，远处两个自动洒水器自己转（黄昏自动开；你手动开时它们也跟着开）。
 
 - **开放时间**：日落前 30 分钟自动打开，日落后 40 分钟关。其余时间（白天、夜里）都可以按 Play 手动开；黄昏也可以手动关。按 Play 时左上角亮 2 秒的水量刻度，开着是亮的，关着是暗的。
 - **喷头**：手指在转盘哪里，水就喷向哪里。转得慢，水落得近、湿得透；转得快，洒得远、只湿一层皮。
@@ -154,6 +159,43 @@ Ten slow, ambient Lua apps for the iPod Nano 2G running Rockbox: a sandpile, a f
   - 一局结束后，Select 开新局。
   - 长按 Select：说明页（英文，屏幕字体没有中文）。在说明页按 Play 重开一局，按别的键关掉。第一次打开时会自动显示。
   - 选子时按 Menu 退出。
+
+### 地下城 `dungeon.lua`
+
+一个很小的 roguelike。每一层是用元胞自动机长出来的洞穴，回合制：你走一步，怪物各走一步；你不动，世界就不动。
+
+- **视野**：只看得见视线内大约 6 格；走过的地方暗着留在地图上。
+- **怪物**：
+  - rat：看见你就追；打斗的声音会把附近的 rat 引过来；身边有 moth 时先去吃 moth。
+  - moth：怕光，在你视野里就逃，离你两格以内跑得更快。被逼到角落才咬人。
+  - shade：只在你停下（原地等、打架、用道具）时才靠近。
+  - newt：只是路过，打它没有任何好处。
+- **道具**：potion 回 5 点血，lamp 照亮整层，charm 让视野里离你最近的那种怪物 30 回合不理你。
+- **墓碑**：你死在哪一层，就在那一层留下一块写着死因的墓碑。以后每一局走到同一层，有一半的机会碰到它。
+- **记录**：走到过的最深一层，以及墓碑。没有分数，也没有通关。
+- **操作**：
+  - 转盘：转动角色周围的箭头（8 个方向），目标格四角亮起，底栏写着会发生什么，比如 `> attack rat`。
+  - Select：执行，可能是走过去、攻击、下楼或捡起。
+  - 长按 Select：原地等一回合。
+  - Play：道具栏，转盘选，Select 用，Menu 关。
+  - 随时退出，地下城停在原地等你回来。
+
+### 小农场 `farm.lua`
+
+5×3 块地，作物按真实时间生长。一共 9 种：萝卜 4 小时、胡萝卜 8 小时、麦子 1 天、番茄和草莓 2 天、玉米 3 天、南瓜 4 天、向日葵 5 天、苹果树 3 周。苹果、番茄、草莓收了还会再结。
+
+- **一个键全包**：Select 对光标所在的地做“下一件该做的事”：拔草、翻地、播种、浇水、收获。底栏写着作物、还要多久，和下一件事。
+- **天气**：下雨天地自己湿，晴天慢慢干。干了的地停止生长，但不会死。
+- **不来的时候**：打开时按离开的小时数补算，最多 60 天。熟了没收的作物过一天会落种，在自己和旁边的空地上重新发芽；杂草从荒地和长草的地块慢慢蔓延，几天多一块。很久不来，农场会长成一片野地，回来先拔草。
+- **乌鸦**：有熟的作物时，偶尔落在那块地的篱笆上坐一两分钟。光标移过去按 Select 赶走它，不然它叼走一颗。
+- **蜜蜂和新品种**：相邻两种作物同时开花，能看到蜜蜂在中间飞。收获时有机会得到颜色介于两者之间的新品种种子，种子袋里带 `*`。
+- **没有金币和商店**：种子只从自己的收成里来，第一次打开时送萝卜、麦子、南瓜、苹果的种子起步。没见过的作物靠“捡”：路过的兔子和刺猬偶尔身上沾着一粒种子，不在的时候也偶尔有种子被风吹来，在空地上自己发芽，平均四天一次，优先是还没见过的作物。
+- **小动物**：只在你看着的时候偶尔路过，一次最多一只。白天的兔子（大约四十分钟一只）路过熟了的萝卜、胡萝卜、草莓会啃掉一颗，光标移到它那块地它就跑；雨天有青蛙跳过，夜里有刺猬慢慢走过，有花开时蝴蝶在田里飘。
+- **谷仓**：种子袋里按下一首翻到谷仓页，列出 9 种作物各收过多少，没见过的作物是问号。
+- **操作**：
+  - 转盘：光标在 15 块地之间按蛇形顺序移动。
+  - Select：下一件该做的事。
+  - Play：种子袋，转盘选，Select 定；下一首 / 上一首切到谷仓页。
 
 所有应用都是短按 Menu 退出（松手时退出），进度自动保存。**长按 Menu** 打开这个应用的说明页：一段介绍和所有按键的用法，转盘上下翻，按任意键关掉。
 
