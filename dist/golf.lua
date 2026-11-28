@@ -388,6 +388,7 @@ end
 
 -- ---------- 说明页（每个应用里长按 Menu 打开） ----------
 -- lines：一行一句，最多约 28 个字符；转盘上下翻，按任意键关掉。关掉以后应用自己重画整屏。
+-- 返回关掉它的那个键（比如 "play"），应用可以拿来在说明页里切换设置。
 local function help_screen(title, lines)
   local bg, ink, hi, dim = rgb(22, 26, 34), rgb(220, 224, 230), rgb(240, 150, 60), rgb(120, 128, 140)
   local rows = div(H - 16, 10)
@@ -412,7 +413,7 @@ local function help_screen(title, lines)
     for _, e in ipairs(poll()) do
       if e.k == "fwd" and not e.rel then top = clamp(top + 1, 1, maxtop)
       elseif e.k == "back" and not e.rel then top = clamp(top - 1, 1, maxtop)
-      elseif (e.k == "menu" or not e.rel) and e.k ~= "help" and not e.rep then return end
+      elseif (e.k == "menu" or not e.rel) and e.k ~= "help" and not e.rep then return e.k end -- 返回关掉它的键
     end
     keep_light()
     rb.sleep(div(HZ, 20))

@@ -291,63 +291,68 @@ do
 end
 check_plants()
 DIRTY = {}
-for y = 1, GH do for x = 1, GW do draw_cell(y * PW + x) end end
+-- 主函数的 local 很紧（Rockbox 上限 100）：循环状态收进 U，按键处理和整屏重画放进函数
+local function redraw_all()
+  for y = 1, GH do for x = 1, GW do draw_cell(y * PW + x) end end
+end
+redraw_all()
 
-local running = true
-local frame, idle, still_since = 0, 0, rb.current_tick()
-local msg, msg_until = nil, 0
+local U = { running = true, frame = 0, idle = 0, still = rb.current_tick(), msg = nil, msg_until = 0 }
+local HELP = {
+  "A box of sand, water and",
+  "seeds. The wheel turns",
+  "gravity. Seeds sprout near",
+  "water; plants need water",
+  "nearby or die in 3 days.",
+  "Corner: plants alive.",
+  "",
+  "*Keys",
+  "wheel   turn gravity 45",
+  "select  pour sand / water /",
+  "        seeds (takes turns)",
+  "next    oldest plant",
+  "menu    quit",
+  "hold menu  this help",
+}
 
-while running do
-  for _, e in ipairs(poll()) do
-    if e.k == "menu" and not e.rel then running = false
-    elseif e.k == "help" then
-      help_screen("GRAVITY", {
-        "A box of sand, water and",
-        "seeds. The wheel turns",
-        "gravity. Seeds sprout near",
-        "water; plants need water",
-        "nearby or die in 3 days.",
-        "Corner: plants alive.",
-        "",
-        "*Keys",
-        "wheel   turn gravity 45",
-        "select  pour sand / water /",
-        "        seeds (takes turns)",
-        "next    oldest plant",
-        "menu    quit",
-        "hold menu  this help",
-      })
-      for y = 1, GH do for x = 1, GW do draw_cell(y * PW + x) end end
-    elseif (e.k == "fwd" or e.k == "back") and not e.rel then
-      S.dir = mod(S.dir + ((e.k == "fwd") and 1 or -1), 8)
-      build_order()
-      idle = 0
-    elseif e.k == "next" and not e.rel and not e.rep then
-      msg, msg_until = "best " .. S.best .. "d", rb.current_tick() + 2 * HZ
-    elseif select_gesture(e) == "short" then
-      sprinkle(); idle = 0
-    end
+local function on_key(e)
+  if e.k == "menu" and not e.rel then U.running = false
+  elseif e.k == "help" then
+    help_screen("GRAVITY", HELP)
+    redraw_all()
+  elseif (e.k == "fwd" or e.k == "back") and not e.rel then
+    S.dir = mod(S.dir + ((e.k == "fwd") and 1 or -1), 8)
+    build_order()
+    U.idle = 0
+  elseif e.k == "next" and not e.rel and not e.rep then
+    U.msg, U.msg_until = "best " .. S.best .. "d", rb.current_tick() + 2 * HZ
+  elseif select_gesture(e) == "short" then
+    sprinkle(); U.idle = 0
   end
+end
+
+while U.running do
+  for _, e in ipairs(poll()) do on_key(e) end
 
   -- 静下来以后少算：每 8 帧才扫一次
   local moved = 0
-  if idle < 3 or mod(frame, 8) == 0 then
+  if U.idle < 3 or mod(U.frame, 8) == 0 then
     moved = physics()
-    if moved > 0 then idle = 0; still_since = rb.current_tick() else idle = idle + 1 end
+    if moved > 0 then U.idle = 0; U.still = rb.current_tick() else U.idle = U.idle + 1 end
   end
   grow(20, 4)
 
   -- 静止超过一分钟：随便推一粒沙
-  if rb.current_tick() - still_since > 60 * HZ then
-    still_since = rb.current_tick()
+  if rb.current_tick() - U.still > 60 * HZ then
+    U.still = rb.current_tick()
     for _ = 1, 30 do
       local p = (rnd(GH) + 1) * PW + rnd(GW) + 1
       local t = p + OFF[mod(S.dir + 1 + rnd(2) * 6, 8)]
-      if G[p] == SAND and G[t] == EMPTY then set(p, EMPTY); set(t, SAND); idle = 0; break end
+      if G[p] == SAND and G[t] == EMPTY then set(p, EMPTY); set(t, SAND); U.idle = 0; break end
     end
   end
 
-  if mod(frame, CHECK_FRAMES) == 0 then check_plants() end
+  if mod(U.frame, CHECK_FRAMES) == 0 then check_plants() end
 
   -- 只画动过的格子；一帧最多画 250 个，剩下的下一帧画
   local n = #DIRTY
@@ -358,13 +363,13 @@ while running do
     if inside(p) then draw_cell(p) end
   end
   local label = tostring(S.plants)
-  if msg and rb.current_tick() < msg_until then label = msg else msg = nil end
+  if U.msg and rb.current_tick() < U.msg_until then label = U.msg else U.msg = nil end
   draw_overlay(label)
   rb.lcd_update()
   keep_light()
 
-  frame = frame + 1
-  if mod(frame, 900) == 0 then save() end
+  U.frame = U.frame + 1
+  if mod(U.frame, 900) == 0 then save() end
   rb.sleep(div(HZ, 25))
 end
 

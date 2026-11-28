@@ -208,33 +208,36 @@ local function enter(k)
   catch, settled = pending_gens(), false
 end
 local function say(s) msg, msg_until = s, rb.current_tick() + 2 * HZ end
+-- 主函数的 local 很紧（Rockbox 上限 100）：说明页放进函数，免得它的 for 压在按键循环里
+local function show_help()
+  help_screen("RULES", {
+    "The Game of Life. The",
+    "wheel turns the physics:",
+    "each click is a nearby",
+    "rule. Colour = age.",
+    "Away, it runs 1 gen per",
+    "5 min. Corner: rule no.,",
+    "+N catching up, loop.",
+    "",
+    "*Keys",
+    "wheel   change rule",
+    "select  save as favourite",
+    "hold select  seed centre",
+    "play    favourites / back",
+    "  wheel   flip favourites",
+    "  select  bring this back",
+    "menu    quit",
+    "hold menu  this help",
+  })
+  for i = 1, N do SHOWN[i] = -1 end
+  label_w = 0
+end
 
 while running do
   for _, e in ipairs(poll()) do
     local g = select_gesture(e)
     if e.k == "menu" and not e.rel then running = false
-    elseif e.k == "help" then
-      help_screen("RULES", {
-        "The Game of Life. The",
-        "wheel turns the physics:",
-        "each click is a nearby",
-        "rule. Colour = age.",
-        "Away, it runs 1 gen per",
-        "5 min. Corner: rule no.,",
-        "+N catching up, loop.",
-        "",
-        "*Keys",
-        "wheel   change rule",
-        "select  save as favourite",
-        "hold select  seed centre",
-        "play    favourites / back",
-        "  wheel   flip favourites",
-        "  select  bring this back",
-        "menu    quit",
-        "hold menu  this help",
-      })
-      for i = 1, N do SHOWN[i] = -1 end
-      label_w = 0
+    elseif e.k == "help" then show_help()
     elseif (e.k == "fwd" or e.k == "back") and not e.rel and catch == 0 then
       local d = (e.k == "fwd") and 1 or -1
       if viewing == 0 then

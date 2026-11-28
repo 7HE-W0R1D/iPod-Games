@@ -388,6 +388,7 @@ end
 
 -- ---------- 说明页（每个应用里长按 Menu 打开） ----------
 -- lines：一行一句，最多约 28 个字符；转盘上下翻，按任意键关掉。关掉以后应用自己重画整屏。
+-- 返回关掉它的那个键（比如 "play"），应用可以拿来在说明页里切换设置。
 local function help_screen(title, lines)
   local bg, ink, hi, dim = rgb(22, 26, 34), rgb(220, 224, 230), rgb(240, 150, 60), rgb(120, 128, 140)
   local rows = div(H - 16, 10)
@@ -412,7 +413,7 @@ local function help_screen(title, lines)
     for _, e in ipairs(poll()) do
       if e.k == "fwd" and not e.rel then top = clamp(top + 1, 1, maxtop)
       elseif e.k == "back" and not e.rel then top = clamp(top - 1, 1, maxtop)
-      elseif (e.k == "menu" or not e.rel) and e.k ~= "help" and not e.rep then return end
+      elseif (e.k == "menu" or not e.rel) and e.k ~= "help" and not e.rep then return e.k end -- 返回关掉它的键
     end
     keep_light()
     rb.sleep(div(HZ, 20))
@@ -984,41 +985,44 @@ if S.best < S.depth then S.best = S.depth end
 light_start()
 compute_fov()
 
-local running = true
-local inv_open, inv_sel = false, 1
-local dirty = true
-while running do
-  for _, e in ipairs(poll()) do
-    local g = select_gesture(e)
-    if e.k == "help" then help_screen("DUNGEON", HELP); shown = {}; dirty = true
-    elseif inv_open then
-      local list = {}
-      for k = 1, 3 do if S.inv[k] > 0 then list[#list + 1] = k end end
-      if e.k == "menu" then inv_open = false
-      elseif e.k == "fwd" and not e.rel then inv_sel = clamp(inv_sel + 1, 1, math.max(1, #list))
-      elseif e.k == "back" and not e.rel then inv_sel = clamp(inv_sel - 1, 1, math.max(1, #list))
-      elseif g == "short" then
-        inv_open = false
-        if list[inv_sel] then use_item(list[inv_sel]) end
-      elseif e.k == "play" and not e.rel and not e.rep then inv_open = false end
-      dirty = true
-    elseif e.k == "menu" then running = false
-    elseif S.dead then
-      if g == "short" then new_run(); compute_fov(); dirty = true end
-    elseif e.k == "fwd" and not e.rel then S.dir = mod(S.dir + 1, 8); dirty = true
-    elseif e.k == "back" and not e.rel then S.dir = mod(S.dir + 7, 8); dirty = true
-    elseif g == "short" then act(); dirty = true
-    elseif g == "long" then say("you wait"); end_turn(true); dirty = true
-    elseif e.k == "play" and not e.rel and not e.rep then inv_open, inv_sel = true, 1; dirty = true
-    end
+-- 主函数的 local 很紧（Rockbox 上限 100）：循环状态收进 U，按键处理放进函数
+local U = { running = true, inv_open = false, inv_sel = 1, dirty = true }
+local function inv_list()
+  local list = {}
+  for k = 1, 3 do if S.inv[k] > 0 then list[#list + 1] = k end end
+  return list
+end
+
+local function on_key(e)
+  local g = select_gesture(e)
+  if e.k == "help" then help_screen("DUNGEON", HELP); shown = {}; U.dirty = true
+  elseif U.inv_open then
+    local list = inv_list()
+    if e.k == "menu" then U.inv_open = false
+    elseif e.k == "fwd" and not e.rel then U.inv_sel = clamp(U.inv_sel + 1, 1, math.max(1, #list))
+    elseif e.k == "back" and not e.rel then U.inv_sel = clamp(U.inv_sel - 1, 1, math.max(1, #list))
+    elseif g == "short" then
+      U.inv_open = false
+      if list[U.inv_sel] then use_item(list[U.inv_sel]) end
+    elseif e.k == "play" and not e.rel and not e.rep then U.inv_open = false end
+    U.dirty = true
+  elseif e.k == "menu" then U.running = false
+  elseif S.dead then
+    if g == "short" then new_run(); compute_fov(); U.dirty = true end
+  elseif e.k == "fwd" and not e.rel then S.dir = mod(S.dir + 1, 8); U.dirty = true
+  elseif e.k == "back" and not e.rel then S.dir = mod(S.dir + 7, 8); U.dirty = true
+  elseif g == "short" then act(); U.dirty = true
+  elseif g == "long" then say("you wait"); end_turn(true); U.dirty = true
+  elseif e.k == "play" and not e.rel and not e.rep then U.inv_open, U.inv_sel = true, 1; U.dirty = true
   end
-  if dirty and running then
-    dirty = false
+end
+
+while U.running do
+  for _, e in ipairs(poll()) do on_key(e) end
+  if U.dirty and U.running then
+    U.dirty = false
     if S.dead then draw_dead()
-    elseif inv_open then
-      local list = {}
-      for k = 1, 3 do if S.inv[k] > 0 then list[#list + 1] = k end end
-      draw_map(); draw_inv(inv_sel, list)
+    elseif U.inv_open then draw_map(); draw_inv(U.inv_sel, inv_list())
     else draw_map() end
   end
   keep_light()

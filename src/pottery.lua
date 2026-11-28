@@ -1,13 +1,16 @@
--- 陶艺转盘：泥在拉坯机上自己转。转盘把双手上下移动，上一首 / 下一首把那一层收窄 / 甩宽。
--- 转盘：手的高度（看架子时横向浏览）   上一首 / 下一首：收窄 / 加宽   Select 或 Play：送进窑
+-- 陶艺转盘：泥在拉坯机上自己转。双手自己从底往上走，大约 30 秒走到顶；转盘把双手往里收 / 往外放。
+-- 双手一开始在最外面，碰不到泥；往里收到泥边上，那一层就被收窄、拔高。下一首把手所在的那一层甩宽。
+-- 转盘：手往里 / 往外（看架子时横向浏览）   上一首 / 下一首：收窄 / 加宽   Select 或 Play：送进窑
 -- 长按 Select：看架子   Menu：退出   长按 Menu：说明
--- 收窄的地方会被拔高，加宽的地方变扁；悬出去太多会歪掉。进窑一小时后才看到成品，窑上的小钟走一圈就好了。
+-- 悬出去太多会歪掉。进窑一小时后才看到成品，窑上的小钟走一圈就好了。
 
 local SAVE = "slow_pottery.txt"
 local NL = 30                  -- 层数
 local KILN_SECONDS = 3600      -- 烧窑一小时
 local RMIN, RMAX = 4, 46       -- 每层半径的范围
 local OVERHANG = 10            -- 比下面一层宽出这么多就开始失稳
+local PASS_TICKS = 30 * HZ     -- 手从底走到顶大约 30 秒
+local REACH_OUT = RMAX + 6     -- 手的最外位置（默认在这里，碰不到泥）
 local CX, BASE = div(W, 2), H - 10
 
 local CLAY = { 168, 112, 80 }
@@ -70,8 +73,10 @@ end
 
 -- ---------- 画罐子 ----------
 -- scale：1 原大，2 缩小一半。phase：转动的相位，让横线上的明暗流动。
+local hand_y -- 手所在那一层画到的屏幕行，画完罐子后画手用
 local function draw_pot(cx, by, p, scale, body, phase, hand_layer)
   local y = by
+  hand_y = nil
   local hi = pack(mix(body, { 255, 255, 255 }, 1, 4))
   local lo = pack(mix(body, { 0, 0, 0 }, 1, 3))
   local mid = pack(body)
@@ -97,9 +102,7 @@ local function draw_pot(cx, by, p, scale, body, phase, hand_layer)
               fg(lo); rect(x0 + mod(phase + row * 5, r * 2), y, 1, 1) -- 转动时流动的暗纹
             end
           end
-          if hand_layer == i and scale == 1 then
-            fg(rgb(225, 180, 150)); rect(x0 - 4, y - 1, 3, 3); rect(x0 + r * 2 + 1, y - 1, 3, 3)
-          end
+          if hand_layer == i and scale == 1 and not hand_y then hand_y = y end
         end
       end
     end
@@ -113,14 +116,21 @@ local function new_lump()
 end
 
 local BG = rgb(38, 32, 30)
-local function draw_wheel_scene(p, phase, hand_layer, wob)
+local function draw_wheel_scene(p, phase, hand_layer, wob, reach)
   fg(BG); rect(0, 0, W, H)
   fg(rgb(90, 90, 95)); rect(CX - 50, BASE, 100, 4); fg(rgb(60, 60, 64)); rect(CX - 44, BASE + 4, 88, 6)
   local c = { CLAY[1], CLAY[2], CLAY[3] }
   if wob > 20 then -- 失稳时泥颜色发暗、发抖
-    c = mix(CLAY, { 110, 70, 50 }, wob, 80)
+    c = mix(CLAY, { 110, 70, 50 }, math.min(wob, 80), 80)
   end
   draw_pot(CX + (wob > 30 and mod(phase, 3) - 1 or 0), BASE, p, 1, c, phase, hand_layer)
+  if hand_layer then -- 双手：贴着泥，或者停在 reach 的位置（还没碰到泥）
+    local y = hand_y or BASE - 1
+    local r = math.max(reach, p.r[hand_layer])
+    local o = p.off[hand_layer]
+    fg(rgb(225, 180, 150)); rect(CX + o - r - 4, y - 1, 3, 3); rect(CX + o + r + 1, y - 1, 3, 3)
+    fg(rgb(190, 145, 120)); rect(CX + o - r - 9, y, 5, 2); rect(CX + o + r + 4, y, 5, 2)
+  end
   text_r(W - 2, 2, tostring(#shelf), rgb(120, 105, 95), BG)
   rb.lcd_update()
 end
@@ -265,7 +275,9 @@ load()
 light_start()
 local mode = "wheel"           -- wheel / kiln / shelf
 local pot = new_lump()
-local hand = 1                 -- 手在第几层：开局在最宽的底层
+local hand = 1                 -- 手在第几层：自己从底往上走，走过顶就是 nil
+local reach = REACH_OUT        -- 双手离中心多远：默认在最外面
+local started, start_tick = false, 0 -- 第一次动手之后，手才开始往上走
 local shaped = false           -- 动过泥才能送窑，免得误触
 local wob, phase, bad = 0, 0, false
 local scroll = 0
@@ -273,6 +285,7 @@ local running = true
 
 -- 收窄 / 加宽手所在的那一层（上下各一层跟着动一半）
 local function shape(dr)
+  if not hand then return end
   shaped = true
   for i = math.max(1, hand - 1), math.min(NL, hand + 1) do
     local d = (i == hand) and dr or div(dr, 2)
@@ -304,6 +317,11 @@ local function finish_throw()
   save()
   mode = "kiln"
   pot, hand, shaped, wob, bad = new_lump(), 1, false, 0, false
+  reach, started = REACH_OUT, false
+end
+
+local function start_pass()
+  if not started then started, start_tick = true, rb.current_tick() end
 end
 
 local function check_kiln()
@@ -327,19 +345,23 @@ while running do
     local g = select_gesture(e)
     if e.k == "menu" and not e.rel then running = false
     elseif e.k == "help" then
+      local help_t0 = rb.current_tick()
       help_screen("POTTERY", {
         "The clay spins on the",
-        "wheel. Move your hands up",
-        "and down and shape each",
-        "layer. Narrow = taller,",
-        "wide = flatter. Lean out",
-        "too far and it wobbles.",
+        "wheel. Your hands rise by",
+        "themselves (about 30 s).",
+        "They start out wide; turn",
+        "the wheel to bring them",
+        "in. Squeezed = narrow and",
+        "taller; next flings the",
+        "layer wider. Lean out too",
+        "far and it wobbles.",
         "The kiln takes an hour;",
         "the little clock shows",
         "how far along it is.",
         "",
         "*Keys",
-        "wheel   hands up / down",
+        "wheel   hands in / out",
         "        (shelf: scroll)",
         "next    widen",
         "prev    narrow",
@@ -349,6 +371,7 @@ while running do
         "menu    quit",
         "hold menu  this help",
       })
+      start_tick = start_tick + rb.current_tick() - help_t0 -- 看说明的时间不算
     elseif g == "long" then
       if mode == "shelf" then back_from_shelf() else mode = "shelf" end
     elseif mode == "shelf" then
@@ -357,23 +380,39 @@ while running do
     elseif mode == "kiln" then
       if e.k == "play" and not e.rel and not e.rep then mode = "shelf" end
     else -- wheel
-      if e.k == "fwd" and not e.rel then hand = clamp(hand + 1, 1, NL)
-      elseif e.k == "back" and not e.rel then hand = clamp(hand - 1, 1, NL)
-      elseif e.k == "next" and not e.rel then shape(2)
-      elseif e.k == "prev" and not e.rel then shape(-2)
+      if e.k == "fwd" and not e.rel then reach = clamp(reach - 2, RMIN, REACH_OUT); start_pass()
+      elseif e.k == "back" and not e.rel then reach = clamp(reach + 2, RMIN, REACH_OUT); start_pass()
+      elseif e.k == "next" and not e.rel then start_pass(); shape(2)
+      elseif e.k == "prev" and not e.rel then start_pass(); shape(-2)
       elseif (g == "short" or (e.k == "play" and not e.rel and not e.rep)) and shaped then finish_throw() end
     end
   end
 
   if mode == "wheel" then
     phase = phase + 3
+    if started and hand then
+      local tk = rb.current_tick()
+      local hp = div((tk - start_tick) * NL, PASS_TICKS) + 1
+      hand = hp <= NL and hp or nil
+      -- 手比泥窄：把这一层（上下各带一半）往里收，收窄的地方被拔高
+      if hand and pot.r[hand] > reach then
+        shaped = true
+        for i = math.max(1, hand - 1), math.min(NL, hand + 1) do
+          if pot.r[i] > reach and (i == hand or mod(tk, 2) == 0) then pot.r[i] = pot.r[i] - 1 end
+        end
+        if pot.r[hand] < 16 and pot.h[hand] < 4 and mod(tk, 4) == 0 then pot.h[hand] = pot.h[hand] + 1 end
+        for i = 2, NL do pot.r[i] = clamp(pot.r[i], pot.r[i - 1] - 3, pot.r[i - 1] + 3) end
+        for i = NL - 1, 1, -1 do pot.r[i] = clamp(pot.r[i], pot.r[i + 1] - 3, pot.r[i + 1] + 3) end
+      end
+    end
     -- 悬出去太多：慢慢歪掉
-    if overhang() > OVERHANG then wob = wob + 2 elseif wob > 0 and not bad then wob = wob - 1 end
+    if overhang() > OVERHANG then wob = math.min(wob + 2, 120) elseif wob > 0 and not bad then wob = wob - 1 end
     if wob > 70 and not bad then
       bad = true
-      for i = hand, NL do pot.off[i] = clamp(div((i - hand) * (i - hand), 6), 0, 40) end
+      local from = hand or NL
+      for i = from, NL do pot.off[i] = clamp(div((i - from) * (i - from), 6), 0, 40) end
     end
-    draw_wheel_scene(pot, phase, hand, wob)
+    draw_wheel_scene(pot, phase, hand, wob, reach)
   elseif mode == "kiln" then
     check_kiln()
     if mode == "kiln" then draw_kiln(now()) end

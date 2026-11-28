@@ -258,31 +258,37 @@ local light_min = L.min
 local running = true
 local frame = 0
 local last_pos = -1
+-- 主函数的 local 很紧（Rockbox 上限 100）：带嵌套 for 的重画放进函数
+local function show_help()
+  help_screen("SPRINKLER", {
+    "A lawn at dusk. The far",
+    "sprinklers start near",
+    "sunset; you hold the one",
+    "in the middle. Grass soaked",
+    "each day stays green.",
+    "",
+    "*Keys",
+    "wheel   aim: water goes",
+    "        where your finger is",
+    "        slow = near, soaks",
+    "        fast = far, light",
+    "prev    less water",
+    "next    more water",
+    "play    on / off",
+    "menu    quit",
+    "hold menu  this help",
+  })
+  for i = 1, N do mark(i) end
+  draw_dirty(N)
+end
+local function clear_flow_scale()
+  for x = 0, 28, CELL do for y = 0, 12, CELL do mark_px(x, y) end end
+end
 
 while running do
   for _, e in ipairs(poll()) do
     if e.k == "menu" and not e.rel then running = false
-    elseif e.k == "help" then
-      help_screen("SPRINKLER", {
-        "A lawn at dusk. The far",
-        "sprinklers start near",
-        "sunset; you hold the one",
-        "in the middle. Grass soaked",
-        "each day stays green.",
-        "",
-        "*Keys",
-        "wheel   aim: water goes",
-        "        where your finger is",
-        "        slow = near, soaks",
-        "        fast = far, light",
-        "prev    less water",
-        "next    more water",
-        "play    on / off",
-        "menu    quit",
-        "hold menu  this help",
-      })
-      for i = 1, N do mark(i) end
-      draw_dirty(N)
+    elseif e.k == "help" then show_help()
     elseif (e.k == "fwd" or e.k == "back") and not e.rel and last_pos < 0 then
       -- 读不到转盘位置时，退回数事件转喷头
       S.aim = mod(S.aim + ((e.k == "fwd") and 1 or -1), 32)
@@ -351,7 +357,7 @@ while running do
       end
     else
       S.flow_until = 0
-      for x = 0, 28, CELL do for y = 0, 12, CELL do mark_px(x, y) end end
+      clear_flow_scale()
     end
   end
   rb.lcd_update()

@@ -1,9 +1,9 @@
 -- 国际象棋：和机器里的对手下棋。它思考时，正在考虑的走法会在棋盘上淡淡闪过
+-- 开局界面：转盘选 人对人 / 执白 / 执黑 / 电脑对电脑，Select 开始（执黑时棋盘倒过来）
 -- 选子：转盘在能动的棋子之间跳，落点提示跟着显示；Select 选中
 -- 落子：转盘在合法落点之间跳；Select 落子；Menu 退回选子
--- 上一首：悔一步   Play：思考时间 3 / 10 / 30 秒   Menu（选子时）：退出
--- 下一首：电脑对电脑，你只看；再按一次，轮到白方时交还给你。观战时 Play 切换每步 5 / 10 / 20 秒
--- 长按 Select：说明（在说明页按 Play 重开一局）
+-- 上一首：悔一步   Play：思考时间 3 / 10 / 30 秒（观战时：每步至少隔 5 / 10 / 20 秒）
+-- 长按 Select：回开局界面   短按 Menu（选子时）退出，长按 Menu 看说明
 
 local SAVE = "slow_chess.txt"
 
@@ -481,9 +481,12 @@ for t = 1, 6 do
   RUNS[t], SMALL[t] = runs, small
 end
 
+local FLIP = { on = false } -- 执黑时棋盘倒过来，黑方在下面
 local function sq_xy(sq) -- 信箱格 → 屏幕左上角
   local r = div(sq, 10) - 2
-  return BX + (sq - (r + 2) * 10 - 1) * SQS, BY + r * SQS
+  local f = sq - (r + 2) * 10 - 1
+  if FLIP.on then r, f = 7 - r, 7 - f end
+  return BX + f * SQS, BY + r * SQS
 end
 local function draw_piece(p, x, y)
   if p == 0 then return end
@@ -498,20 +501,28 @@ end
 -- ---------- 状态 ----------
 local LEVELS = { 3, 10, 30 }
 local PACES = { 5, 10, 20 }      -- 电脑对电脑：每步至少隔几秒
+local KINDS = { "2 players", "you white", "you black", "cpu vs cpu" }
 local G = {
+  scr = "menu", kind = 2, sel = 2, gm = { 0, 0, 0, 0 }, ww = { 0, 0, 0, 0 }, bw = { 0, 0, 0, 0 },
   mode = "pick", level = 1, hist = {}, legal = {}, pieces = {}, targets = {},
   cur = 1, tcur = 1, pcur = 1, sel = 0, last_f = 0, last_t = 0, think_f = 0, think_t = 0,
   games = 0, wins = 0, undos = 0, last_undos = 0, result = nil, note = nil, note_until = 0,
   quit = false, shown = {}, strip_key = "", watch = false, pace = 2, wait_until = 0, over_at = 0, reps = {}, half = 0,
 }
 local PROMOS = { 5, 4, 3, 2 }
+-- 这一方（1 白，-1 黑）是不是人在下
+local function human(side)
+  local k = G.kind
+  return k == 1 or (k == 2 and side == 1) or (k == 3 and side == -1)
+end
 
 local function save()
   local h = {}
   for i, m in ipairs(G.hist) do h[i] = m.f .. "," .. m.t .. "," .. m.p end
-  save_kv(SAVE, { moves = table.concat(h, ";"), level = G.level, games = G.games, wins = G.wins,
-                  undos = G.undos, last_undos = G.last_undos, result = G.result or "",
-                  watch = G.watch and 1 or 0, pace = G.pace })
+  local t = { moves = table.concat(h, ";"), level = G.level, kind = G.kind, scr = G.scr,
+              undos = G.undos, last_undos = G.last_undos, result = G.result or "", pace = G.pace }
+  for k = 1, 4 do t["g" .. k] = G.gm[k] .. "," .. G.ww[k] .. "," .. G.bw[k] end
+  save_kv(SAVE, t)
 end
 
 -- 轮到玩家：算出能动的棋子和各自的落点
@@ -567,11 +578,10 @@ local function finish_game(result)
   G.result = result
   G.mode = "over"
   G.over_at = rb.current_tick()
-  if not G.watch then -- 电脑对电脑的局不算进你的记录
-    G.games = G.games + 1
-    if result == "1-0" then G.wins = G.wins + 1 end
-    G.last_undos = G.undos
-  end
+  local k = G.kind
+  G.gm[k] = G.gm[k] + 1
+  if result == "1-0" then G.ww[k] = G.ww[k] + 1 elseif result == "0-1" then G.bw[k] = G.bw[k] + 1 end
+  if k == 2 or k == 3 then G.last_undos = G.undos end
   save()
 end
 local function check_over()
@@ -582,14 +592,17 @@ local function check_over()
   return true
 end
 
-local function new_game()
+local function new_game(kind)
+  if kind then G.kind = kind end
+  G.watch, FLIP.on, G.scr = G.kind == 4, G.kind == 3, "play"
+  G.shown, G.strip_key = {}, ""
   E.new_game()
   G.reps, G.half = {}, 0
   note_position(true)
   G.hist, G.result, G.undos = {}, nil, 0
   G.last_f, G.last_t, G.cur = 0, 0, 1
-  G.mode = G.watch and "think" or "pick"
-  if G.last_undos > 0 and not G.watch then G.note, G.note_until = "undo " .. G.last_undos, rb.current_tick() + 6 * HZ end
+  G.mode = human(1) and "pick" or "think"
+  if G.last_undos > 0 and (G.kind == 2 or G.kind == 3) then G.note, G.note_until = "undo " .. G.last_undos, rb.current_tick() + 6 * HZ end
   refresh_turn()
 end
 
@@ -611,13 +624,19 @@ end
 local function load()
   local s, found = load_kv(SAVE)
   G.level = clamp(num(s.level, 1), 1, #LEVELS)
-  G.games, G.wins = num(s.games, 0), num(s.wins, 0)
   G.last_undos = num(s.last_undos, 0)
-  G.watch = s.watch == "1"
   G.pace = clamp(num(s.pace, 2), 1, #PACES)
+  for k = 1, 4 do
+    local a, b, c = string.match(s["g" .. k] or "", "(%d+),(%d+),(%d+)")
+    G.gm[k], G.ww[k], G.bw[k] = num(a, 0), num(b, 0), num(c, 0)
+  end
+  if not s.g2 and s.games then G.gm[2], G.ww[2] = num(s.games, 0), num(s.wins, 0) end -- 旧存档：你执白的记录
+  G.kind = clamp(num(s.kind, (s.watch == "1") and 4 or 2), 1, 4)
+  G.sel = G.kind
   new_game()
   G.note = nil
-  if not found then G.first = true; return end -- 第一次打开：先看说明
+  if not found then G.first = true end -- 第一次打开：先看说明
+  if not found or s.scr == "menu" then G.scr = "menu"; return end
   local hist = {}
   for f, t, p in string.gmatch(s.moves or "", "(%d+),(%d+),(%d+)") do
     hist[#hist + 1] = { f = num(f, 0), t = num(t, 0), p = num(p, 0) }
@@ -625,7 +644,7 @@ local function load()
   replay(hist)
   G.undos = num(s.undos, 0)
   if s.result and s.result ~= "" then G.result, G.mode, G.over_at = s.result, "over", rb.current_tick()
-  elseif E.side() == -1 or G.watch then G.mode = "think"
+  elseif not human(E.side()) then G.mode = "think"
   else refresh_turn() end
 end
 
@@ -686,7 +705,7 @@ local function draw_strip()
   if key == G.strip_key then return end
   G.strip_key = key
   fg(C.strip); rect(SX, 0, W - SX, H)
-  for side, y0 in pairs({ [-1] = 3, [1] = 34 }) do
+  for side, y0 in pairs(FLIP.on and { [1] = 3, [-1] = 34 } or { [-1] = 3, [1] = 34 }) do
     for k, t in ipairs(lost[side]) do
       local x = SX + 2 + mod(k - 1, 5) * 9
       local y = y0 + div(k - 1, 5) * 10
@@ -699,7 +718,7 @@ local function draw_strip()
   if G.result then
     if G.mode == "over" then text(SX + 4, H - 54, "sel:new", C.title, C.strip) end
     text(SX + 4, H - 40, G.result, C.ink, C.strip)
-    text(SX + 4, H - 28, G.wins .. "/" .. G.games, C.ink, C.strip)
+    text(SX + 4, H - 28, G.ww[G.kind] .. "-" .. G.bw[G.kind], C.ink, C.strip)
   elseif G.note then
     text(SX + 4, H - 28, G.note, C.ink, C.strip)
   end
@@ -744,7 +763,6 @@ local function think_hook(f, t)
   render()
   for _, e in ipairs(poll()) do
     if e.k == "menu" and not e.rel then G.quit = true
-    elseif e.k == "next" and not e.rel and not e.rep then G.watch = not G.watch
     elseif e.k == "help" then G.help_req = true end
   end
   if G.quit then return end
@@ -772,44 +790,66 @@ local function engine_move()
   G.hist[#G.hist + 1] = m
   G.last_f, G.last_t = f, t
   if not check_over() then
-    -- 电脑对电脑：接着替另一方想；否则轮到白方时交给你
-    if G.watch or E.side() == -1 then G.mode = "think" else G.mode = "pick" end
+    -- 电脑对电脑：接着替另一方想；否则交给你
+    if not human(E.side()) then G.mode = "think" else G.mode = "pick" end
     refresh_turn()
   end
 end
 
--- ---------- 主循环 ----------
-load()
-light_start()
-fg(C.strip); rect(0, 0, W, H)
-render()
-
-local HELP = {
-  "wheel     move cursor",
-  "select    pick, place, new",
-  "menu      back / quit",
-  "prev      undo",
-  "next      auto play on/off",
-  "play      think 3/10/30s",
-  "  (auto: 5/10/20s a move)",
-  "hold menu this help",
-  "orange dot    can go here",
-  "orange corner capture",
-  "",
-  "PLAY now: new game",
-  "other keys: close",
-}
-local function open_help()
-  G.help = true
-  fg(C.helpbg); rect(0, 0, W, H)
-  text(4, 2, "CHESS", C.title, C.helpbg)
-  for i, line in ipairs(HELP) do text(4, 2 + i * 9, line, (i >= 12) and C.title or C.ink, C.helpbg) end
+-- ---------- 开局界面 ----------
+local function draw_menu()
+  local bg = C.helpbg
+  fg(bg); rect(0, 0, W, H)
+  text(4, 3, "CHESS", C.title, bg)
+  for k = 1, 4 do
+    local y = 18 + (k - 1) * 24
+    if k == G.sel then fg(C.title); rect(2, y - 1, 3, 19) end
+    text(10, y, KINDS[k], (k == G.sel) and C.title or C.ink, bg)
+    text(10, y + 10, G.gm[k] .. " games  W " .. G.ww[k] .. "  B " .. G.bw[k], C.dim, bg)
+  end
+  text(10, 118, "think " .. LEVELS[G.level] .. "s", C.dim, bg)
   rb.lcd_update()
 end
-local function close_help()
-  G.help = false
-  G.shown, G.strip_key = {}, ""
+local function to_menu()
+  G.sel, G.scr = G.kind, "menu"
+  save()
+  draw_menu()
 end
+local function full_redraw()
+  G.shown, G.strip_key = {}, ""
+  fg(C.strip); rect(0, 0, W, H)
+end
+
+local HELP = {
+  "You against the machine,",
+  "or two people, or watch",
+  "it play itself. While it",
+  "thinks, the moves it is",
+  "weighing flicker on the",
+  "board.",
+  "",
+  "*Keys",
+  "wheel   move cursor",
+  "select  pick, place",
+  "menu    back / quit",
+  "prev    undo",
+  "play    think 3/10/30 s",
+  "        (watching: 5/10/20",
+  "        s a move)",
+  "hold select  back to modes",
+  "hold menu    this help",
+  "",
+  "*Board",
+  "orange dot    can go here",
+  "orange corner capture",
+  "draw: stalemate, 3 repeats",
+  "or 50 moves",
+}
+local function help()
+  help_screen("CHESS", HELP)
+  if G.scr == "menu" then draw_menu() else full_redraw() end
+end
+
 local function select_action()
   if G.mode == "pick" and #G.pieces > 0 then
     G.sel = G.pieces[G.cur]
@@ -824,81 +864,103 @@ local function select_action()
   elseif G.mode == "promo" then
     G.pending = { f = G.sel, t = G.targets[G.tcur], p = PROMOS[G.pcur] }
   elseif G.mode == "over" then
-    new_game()
+    if G.kind == 4 then new_game(4); full_redraw() else to_menu() end
   end
 end
-if G.first then open_help() end
+
+-- 悔棋：人对人退一步；人对电脑退回到上一次轮到你的时候
+local function undo()
+  local h = G.hist
+  local n = #h
+  if n == 0 or G.kind == 4 then return end
+  n = n - 1
+  if G.kind ~= 1 then
+    while n >= 0 and not human((mod(n, 2) == 0) and 1 or -1) do n = n - 1 end
+    if n < 0 then return end
+  end
+  local keep = {}
+  for i = 1, n do keep[i] = h[i] end
+  replay(keep)
+  G.undos = G.undos + 1
+  G.result = nil
+  G.mode = human(E.side()) and "pick" or "think"
+  refresh_turn()
+  save()
+end
+
+local function on_key(e)
+  local g = select_gesture(e)
+  if e.k == "help" then help(); return end
+  if G.scr == "menu" then
+    if e.k == "menu" and not e.rel then G.quit = true
+    elseif (e.k == "fwd" or e.k == "back") and not e.rel then
+      G.sel = mod(G.sel - 1 + ((e.k == "fwd") and 1 or -1), 4) + 1
+      draw_menu()
+    elseif e.k == "play" and not e.rel and not e.rep then G.level = mod(G.level, #LEVELS) + 1; draw_menu()
+    elseif g == "short" then new_game(G.sel); full_redraw(); save() end
+    return
+  end
+  if g == "long" then to_menu(); return end
+  if g == "short" then select_action(); return end
+  if e.rel or e.k == "select" then return end
+  local k = e.k
+  if k == "menu" then
+    if G.mode == "target" then G.mode = "pick"
+    elseif G.mode == "promo" then G.mode = "target"
+    else G.quit = true end
+  elseif k == "fwd" or k == "back" then
+    local d = (k == "fwd") and 1 or -1
+    if G.mode == "pick" and #G.pieces > 0 then G.cur = mod(G.cur - 1 + d, #G.pieces) + 1
+    elseif G.mode == "target" then G.tcur = mod(G.tcur - 1 + d, #G.targets) + 1
+    elseif G.mode == "promo" then G.pcur = mod(G.pcur - 1 + d, #PROMOS) + 1 end
+  elseif k == "play" and not e.rep then
+    if G.watch then G.pace = mod(G.pace, #PACES) + 1
+    else G.level = mod(G.level, #LEVELS) + 1 end
+    save()
+  elseif k == "prev" and not e.rep and (G.mode == "pick" or G.mode == "target" or G.mode == "over") then
+    undo()
+  end
+end
+
+-- ---------- 主循环 ----------
+load()
+light_start()
+if G.first then help() end
+if G.scr == "menu" then draw_menu() else full_redraw(); render() end
 
 while not G.quit do
   for _, e in ipairs(poll()) do
-    local g = select_gesture(e)
-    if G.help then
-      -- 说明页：Play 重开一局；别的键（转盘除外）关掉说明
-      if (not e.rel and not e.rep and e.k ~= "select" and e.k ~= "fwd" and e.k ~= "back" and e.k ~= "help") or g == "short" then
-        if e.k == "play" then new_game() end
-        close_help()
-      end
-    elseif g == "long" or e.k == "help" then open_help()
-    elseif g == "short" then select_action()
-    elseif not e.rel and e.k ~= "select" then
-      local k = e.k
-      if k == "menu" then
-        if G.mode == "target" then G.mode = "pick"
-        elseif G.mode == "promo" then G.mode = "target"
-        else G.quit = true end
-      elseif k == "fwd" or k == "back" then
-        local d = (k == "fwd") and 1 or -1
-        if G.mode == "pick" and #G.pieces > 0 then G.cur = mod(G.cur - 1 + d, #G.pieces) + 1
-        elseif G.mode == "target" then G.tcur = mod(G.tcur - 1 + d, #G.targets) + 1
-        elseif G.mode == "promo" then G.pcur = mod(G.pcur - 1 + d, #PROMOS) + 1 end
-      elseif k == "play" and not e.rep then
-        if G.watch then G.pace = mod(G.pace, #PACES) + 1
-        else G.level = mod(G.level, #LEVELS) + 1 end
-      elseif k == "next" and not e.rep then
-        G.watch = not G.watch
-        if G.watch and (G.mode == "pick" or G.mode == "target" or G.mode == "promo") then G.mode = "think" end
-        if not G.watch and G.mode == "think" and E.side() == 1 then G.mode = "pick"; refresh_turn() end
-      elseif k == "prev" and not e.rep and (G.mode == "pick" or G.mode == "target") then
-        -- 悔棋：退回到上一次轮到你的时候
-        local h = G.hist
-        local n = #h
-        if n > 0 then
-          n = n - 1
-          if mod(n, 2) == 1 then n = n - 1 end
-          local keep = {}
-          for i = 1, n do keep[i] = h[i] end
-          replay(keep)
-          G.undos = G.undos + 1
-          G.result, G.mode = nil, "pick"
+    on_key(e)
+    if G.quit then break end
+  end
+
+  if G.scr == "play" then
+    if G.pending then
+      local m = G.pending
+      G.pending = nil
+      if play_move(m) then
+        G.hist[#G.hist + 1] = m
+        G.last_f, G.last_t = m.f, m.t
+        if not check_over() then
+          if human(E.side()) then G.mode = "pick" else G.mode = "think" end
           refresh_turn()
-          save()
         end
+        save()
       end
     end
-  end
 
-  if G.pending then
-    local m = G.pending
-    G.pending = nil
-    if play_move(m) then
-      G.hist[#G.hist + 1] = m
-      G.last_f, G.last_t = m.f, m.t
-      if not check_over() then G.mode = "think" end
-      save()
+    if G.note and rb.current_tick() > G.note_until then G.note = nil end
+    -- 想棋时长按了 Menu：想完再打开说明
+    if G.help_req then G.help_req = nil; help() end
+    -- 一局结束（包括电脑对电脑）就停在终局，等你按 Select 再开下一局
+    if G.scr == "play" then render() end
+
+    local waiting = G.watch and rb.current_tick() < (G.wait_until or 0)
+    if G.scr == "play" and G.mode == "think" and not waiting and not G.quit then
+      local ok = pcall(engine_move)
+      if not ok then G.quit = true end
+      if not G.quit then save() end
     end
-  end
-
-  if G.note and rb.current_tick() > G.note_until then G.note = nil end
-  -- 想棋时长按了 Menu：想完再打开说明
-  if G.help_req and not G.help then G.help_req = nil; open_help() end
-  -- 一局结束（包括电脑对电脑）就停在终局，等你按 Select 再开下一局
-  if not G.help then render() end
-
-  local waiting = G.watch and rb.current_tick() < (G.wait_until or 0)
-  if G.mode == "think" and not G.help and not waiting then
-    local ok = pcall(engine_move)
-    if not ok then G.quit = true end
-    if not G.quit then save() end
   end
 
   keep_light()

@@ -388,6 +388,7 @@ end
 
 -- ---------- 说明页（每个应用里长按 Menu 打开） ----------
 -- lines：一行一句，最多约 28 个字符；转盘上下翻，按任意键关掉。关掉以后应用自己重画整屏。
+-- 返回关掉它的那个键（比如 "play"），应用可以拿来在说明页里切换设置。
 local function help_screen(title, lines)
   local bg, ink, hi, dim = rgb(22, 26, 34), rgb(220, 224, 230), rgb(240, 150, 60), rgb(120, 128, 140)
   local rows = div(H - 16, 10)
@@ -412,7 +413,7 @@ local function help_screen(title, lines)
     for _, e in ipairs(poll()) do
       if e.k == "fwd" and not e.rel then top = clamp(top + 1, 1, maxtop)
       elseif e.k == "back" and not e.rel then top = clamp(top - 1, 1, maxtop)
-      elseif (e.k == "menu" or not e.rel) and e.k ~= "help" and not e.rep then return end
+      elseif (e.k == "menu" or not e.rel) and e.k ~= "help" and not e.rep then return e.k end -- 返回关掉它的键
     end
     keep_light()
     rb.sleep(div(HZ, 20))
@@ -630,33 +631,36 @@ local function enter(k)
   catch, settled = pending_gens(), false
 end
 local function say(s) msg, msg_until = s, rb.current_tick() + 2 * HZ end
+-- 主函数的 local 很紧（Rockbox 上限 100）：说明页放进函数，免得它的 for 压在按键循环里
+local function show_help()
+  help_screen("RULES", {
+    "The Game of Life. The",
+    "wheel turns the physics:",
+    "each click is a nearby",
+    "rule. Colour = age.",
+    "Away, it runs 1 gen per",
+    "5 min. Corner: rule no.,",
+    "+N catching up, loop.",
+    "",
+    "*Keys",
+    "wheel   change rule",
+    "select  save as favourite",
+    "hold select  seed centre",
+    "play    favourites / back",
+    "  wheel   flip favourites",
+    "  select  bring this back",
+    "menu    quit",
+    "hold menu  this help",
+  })
+  for i = 1, N do SHOWN[i] = -1 end
+  label_w = 0
+end
 
 while running do
   for _, e in ipairs(poll()) do
     local g = select_gesture(e)
     if e.k == "menu" and not e.rel then running = false
-    elseif e.k == "help" then
-      help_screen("RULES", {
-        "The Game of Life. The",
-        "wheel turns the physics:",
-        "each click is a nearby",
-        "rule. Colour = age.",
-        "Away, it runs 1 gen per",
-        "5 min. Corner: rule no.,",
-        "+N catching up, loop.",
-        "",
-        "*Keys",
-        "wheel   change rule",
-        "select  save as favourite",
-        "hold select  seed centre",
-        "play    favourites / back",
-        "  wheel   flip favourites",
-        "  select  bring this back",
-        "menu    quit",
-        "hold menu  this help",
-      })
-      for i = 1, N do SHOWN[i] = -1 end
-      label_w = 0
+    elseif e.k == "help" then show_help()
     elseif (e.k == "fwd" or e.k == "back") and not e.rel and catch == 0 then
       local d = (e.k == "fwd") and 1 or -1
       if viewing == 0 then

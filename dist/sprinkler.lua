@@ -388,6 +388,7 @@ end
 
 -- ---------- 说明页（每个应用里长按 Menu 打开） ----------
 -- lines：一行一句，最多约 28 个字符；转盘上下翻，按任意键关掉。关掉以后应用自己重画整屏。
+-- 返回关掉它的那个键（比如 "play"），应用可以拿来在说明页里切换设置。
 local function help_screen(title, lines)
   local bg, ink, hi, dim = rgb(22, 26, 34), rgb(220, 224, 230), rgb(240, 150, 60), rgb(120, 128, 140)
   local rows = div(H - 16, 10)
@@ -412,7 +413,7 @@ local function help_screen(title, lines)
     for _, e in ipairs(poll()) do
       if e.k == "fwd" and not e.rel then top = clamp(top + 1, 1, maxtop)
       elseif e.k == "back" and not e.rel then top = clamp(top - 1, 1, maxtop)
-      elseif (e.k == "menu" or not e.rel) and e.k ~= "help" and not e.rep then return end
+      elseif (e.k == "menu" or not e.rel) and e.k ~= "help" and not e.rep then return e.k end -- 返回关掉它的键
     end
     keep_light()
     rb.sleep(div(HZ, 20))
@@ -680,31 +681,37 @@ local light_min = L.min
 local running = true
 local frame = 0
 local last_pos = -1
+-- 主函数的 local 很紧（Rockbox 上限 100）：带嵌套 for 的重画放进函数
+local function show_help()
+  help_screen("SPRINKLER", {
+    "A lawn at dusk. The far",
+    "sprinklers start near",
+    "sunset; you hold the one",
+    "in the middle. Grass soaked",
+    "each day stays green.",
+    "",
+    "*Keys",
+    "wheel   aim: water goes",
+    "        where your finger is",
+    "        slow = near, soaks",
+    "        fast = far, light",
+    "prev    less water",
+    "next    more water",
+    "play    on / off",
+    "menu    quit",
+    "hold menu  this help",
+  })
+  for i = 1, N do mark(i) end
+  draw_dirty(N)
+end
+local function clear_flow_scale()
+  for x = 0, 28, CELL do for y = 0, 12, CELL do mark_px(x, y) end end
+end
 
 while running do
   for _, e in ipairs(poll()) do
     if e.k == "menu" and not e.rel then running = false
-    elseif e.k == "help" then
-      help_screen("SPRINKLER", {
-        "A lawn at dusk. The far",
-        "sprinklers start near",
-        "sunset; you hold the one",
-        "in the middle. Grass soaked",
-        "each day stays green.",
-        "",
-        "*Keys",
-        "wheel   aim: water goes",
-        "        where your finger is",
-        "        slow = near, soaks",
-        "        fast = far, light",
-        "prev    less water",
-        "next    more water",
-        "play    on / off",
-        "menu    quit",
-        "hold menu  this help",
-      })
-      for i = 1, N do mark(i) end
-      draw_dirty(N)
+    elseif e.k == "help" then show_help()
     elseif (e.k == "fwd" or e.k == "back") and not e.rel and last_pos < 0 then
       -- 读不到转盘位置时，退回数事件转喷头
       S.aim = mod(S.aim + ((e.k == "fwd") and 1 or -1), 32)
@@ -773,7 +780,7 @@ while running do
       end
     else
       S.flow_until = 0
-      for x = 0, 28, CELL do for y = 0, 12, CELL do mark_px(x, y) end end
+      clear_flow_scale()
     end
   end
   rb.lcd_update()

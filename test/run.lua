@@ -1,6 +1,6 @@
 -- 桌面上跑 dist/*.lua 的假 Rockbox 环境。
 -- 用法：lua test/run.lua dist/sandpile.lua [帧数] [时间偏移秒] [按键脚本]
--- 按键脚本：逗号分隔，比如 "fwd*20,select,wait*30,play,longselect"
+-- 按键脚本：逗号分隔，比如 "fwd*20,select,wait*30,play,longselect,longprev"
 -- 检查：画图参数必须是整数（Rockbox 的 Lua 没有浮点）、坐标不能离谱地出屏。
 
 local script, frames, shift, keys = arg[1], tonumber(arg[2] or "300"), tonumber(arg[3] or "0"), arg[4] or ""
@@ -26,7 +26,9 @@ local function isint(v, name)
     error(string.format("%s 收到非整数 %s", name, tostring(v)), 3)
   end
 end
+local stats = {}
 local function ints(name, ...)
+  stats[name] = (stats[name] or 0) + 1
   local n = select("#", ...)
   for i = 1, n do isint((select(i, ...)), name) end
   calls = calls + 1
@@ -48,8 +50,8 @@ for tok in string.gmatch(keys, "[^,]+") do
     elseif name == "fwd" then plan[#plan + 1] = { B.BUTTON_SCROLL_FWD }
     elseif name == "back" then plan[#plan + 1] = { B.BUTTON_SCROLL_BACK }
     elseif name == "flick" then plan[#plan + 1] = { B.BUTTON_SCROLL_FWD, B.BUTTON_SCROLL_FWD, B.BUTTON_SCROLL_FWD, B.BUTTON_SCROLL_FWD, B.BUTTON_SCROLL_FWD, B.BUTTON_SCROLL_FWD }
-    elseif name == "longselect" or name == "longmenu" then
-      local code = (name == "longmenu") and B.BUTTON_MENU or B.BUTTON_SELECT
+    elseif name == "longselect" or name == "longmenu" or name == "longprev" then
+      local code = ({ longmenu = B.BUTTON_MENU, longselect = B.BUTTON_SELECT, longprev = B.BUTTON_LEFT })[name]
       plan[#plan + 1] = { code }
       for _ = 1, 30 do plan[#plan + 1] = { code + B.BUTTON_REPEAT } end
       plan[#plan + 1] = { code + B.BUTTON_REL }
@@ -109,6 +111,23 @@ rb = {
   lcd_update_rect = function() end,
   backlight_on = function() end,
 }
+-- SHADOWCHECK=1：应用把自己记的「背景影子」交过来时，逐像素和帧缓冲比一遍（农场用）
+if os.getenv("SHADOWCHECK") then
+  rb.__checks, rb.__bad = 0, 0
+  rb.__check = function(rows, col, bar)
+    rb.__checks = rb.__checks + 1
+    for y = 0, bar - 1 do
+      local r = rows[y]
+      for x = 0, 175 do
+        local c = col[string.byte(r, x + 1)]
+        if c ~= fb[y * 176 + x] then
+          rb.__bad = rb.__bad + 1
+          if rb.__bad <= 5 then print(string.format("影子不对 帧%d (%d,%d) 影子=%s 屏幕=%06x", frame, x, y, tostring(c), fb[y * 176 + x])) end
+        end
+      end
+    end
+  end
+end
 
 -- 和真机一样：require("buttons") 之后才有 rb.buttons。NOBUTTONS=1 时模拟加载失败。
 package.preload["buttons"] = function()
@@ -130,3 +149,5 @@ os.time = function(t) if t then return real_time(t) end return real_time() + shi
 local ok, err = pcall(dofile, script)
 if not ok then print("FAIL " .. script .. ": " .. tostring(err)); os.exit(1) end
 print(string.format("ok   %s  帧=%d  画图调用=%d", script, frame, calls))
+if os.getenv("CALLSTATS") then for k, v in pairs(stats) do print("  " .. k, v) end end
+if rb.__checks then print(string.format("影子检查 %d 次，不一致的像素 %d 个", rb.__checks, rb.__bad)); if rb.__bad > 0 then os.exit(1) end end
